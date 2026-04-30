@@ -238,6 +238,11 @@ type App struct {
 	// treeRefreshStop signals the background tree-refresh goroutine to exit.
 	treeRefreshStop chan struct{}
 
+	// gitBranch is the current branch name for the project root (or a
+	// short commit SHA when HEAD is detached). Empty when the root isn't
+	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
+	gitBranch string
+
 	quit bool
 }
 
@@ -295,10 +300,12 @@ func (a *App) refreshGitStatus() {
 	if !st.IsRepo {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
+		a.gitBranch = ""
 		return
 	}
 	a.tree.DirtyFiles = st.DirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(st.DirtyFiles, a.rootDir)
+	a.gitBranch = st.Branch
 }
 
 // startTreeRefresh launches a goroutine that posts a treeRefreshEvent every
@@ -1620,6 +1627,19 @@ func (a *App) drawStatusBar() {
 		a.screen.SetContent(cx, sy, ' ', nil, style)
 	}
 
+	// Right-side text: current git branch when we're inside a repo. Drawn
+	// first so the left-side text can be clipped against it and the two
+	// pieces never overlap on a narrow window.
+	var rightWidth int
+	if a.gitBranch != "" {
+		right := " " + a.gitBranch + " "
+		rw := len([]rune(right))
+		if rw < sw {
+			drawAt(a.screen, sx+sw-rw, sy, right, style)
+			rightWidth = rw
+		}
+	}
+
 	// Left-side text: status flash, file info, or root dir.
 	var left string
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
@@ -1641,7 +1661,16 @@ func (a *App) drawStatusBar() {
 	} else {
 		left = " " + filepath.Base(a.rootDir)
 	}
-	drawStatusText(a.screen, sx, sy, sw, left, style)
+	// One cell of breathing room between left and right text so they
+	// don't visually butt up against each other on a tight terminal.
+	leftMax := sw - rightWidth
+	if rightWidth > 0 {
+		leftMax--
+	}
+	if leftMax < 0 {
+		leftMax = 0
+	}
+	drawStatusText(a.screen, sx, sy, leftMax, left, style)
 }
 
 // drawTooSmall paints a centred error message when the terminal window is

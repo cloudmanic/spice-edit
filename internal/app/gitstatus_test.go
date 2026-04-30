@@ -48,7 +48,8 @@ func TestLoadGitStatus_EmptyRoot(t *testing.T) {
 // TestLoadGitStatus_CleanRepo runs the full pipeline against a freshly
 // initialised, fully committed repo and confirms IsRepo flips on but the
 // dirty set comes back empty — the renderer should treat clean files
-// like any other, no Modified-color highlight.
+// like any other, no Modified-color highlight. Also pins down that the
+// branch name comes through populated.
 func TestLoadGitStatus_CleanRepo(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
@@ -62,6 +63,71 @@ func TestLoadGitStatus_CleanRepo(t *testing.T) {
 	}
 	if len(st.DirtyFiles) != 0 {
 		t.Fatalf("expected no dirty files, got %v", st.DirtyFiles)
+	}
+	if st.Branch != "main" {
+		t.Fatalf("expected Branch=main, got %q", st.Branch)
+	}
+}
+
+// TestLoadGitBranch_NotARepo confirms the helper degrades quietly when
+// the directory isn't a git work tree — empty string, no panic, no
+// stderr noise reaching the editor.
+func TestLoadGitBranch_NotARepo(t *testing.T) {
+	if got := loadGitBranch(t.TempDir()); got != "" {
+		t.Fatalf("non-repo branch = %q, want empty", got)
+	}
+	if got := loadGitBranch(""); got != "" {
+		t.Fatalf("empty rootDir branch = %q, want empty", got)
+	}
+}
+
+// TestLoadGitBranch_OnBranch checks the happy path — a fresh repo
+// checked out on `main` returns "main".
+func TestLoadGitBranch_OnBranch(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	if got := loadGitBranch(repo); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+}
+
+// TestLoadGitBranch_TracksRename confirms a rename of the current
+// branch is reflected on the next call — this is the whole point of
+// the 10s tick: the user's checkout state is allowed to change behind
+// the editor's back.
+func TestLoadGitBranch_TracksRename(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	writeFileT(t, filepath.Join(repo, "a.txt"), "x")
+	gitRun(t, repo, "add", "a.txt")
+	gitRun(t, repo, "commit", "-m", "init")
+	gitRun(t, repo, "branch", "-m", "main", "feat/something")
+	if got := loadGitBranch(repo); got != "feat/something" {
+		t.Fatalf("after rename branch = %q, want feat/something", got)
+	}
+}
+
+// TestLoadGitBranch_DetachedHEAD asserts the symbolic-ref fallback
+// kicks in: when HEAD is detached at a commit, the helper returns a
+// short SHA instead of an empty string, so the status bar still shows
+// *something* useful instead of vanishing mid-rebase.
+func TestLoadGitBranch_DetachedHEAD(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	writeFileT(t, filepath.Join(repo, "a.txt"), "x")
+	gitRun(t, repo, "add", "a.txt")
+	gitRun(t, repo, "commit", "-m", "init")
+	gitRun(t, repo, "checkout", "-q", "--detach", "HEAD")
+
+	got := loadGitBranch(repo)
+	if got == "" {
+		t.Fatal("detached HEAD branch came back empty; expected a short SHA")
+	}
+	if got == "main" {
+		t.Fatalf("detached HEAD reported branch name %q; expected SHA", got)
+	}
+	if len(got) > 12 || len(got) < 4 {
+		t.Fatalf("detached HEAD output %q doesn't look like a short SHA", got)
 	}
 }
 
