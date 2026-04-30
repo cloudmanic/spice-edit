@@ -47,7 +47,6 @@ const (
 	doubleClickMs  = 500 * time.Millisecond
 	doubleEscMs    = 500 * time.Millisecond
 	wheelLines     = 3
-	tabIndent      = "    " // 4 spaces — opinionated.
 
 	// treeRefreshInterval is how often the background goroutine kicks off
 	// a file-tree reload so the sidebar stays in sync with on-disk changes
@@ -810,7 +809,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case tcell.KeyDelete:
 		tab.Delete()
 	case tcell.KeyTab:
-		tab.InsertString(tabIndent)
+		tab.InsertString(tab.IndentUnit)
 	case tcell.KeyRune:
 		tab.InsertRune(ev.Rune())
 	}
