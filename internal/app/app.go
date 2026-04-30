@@ -141,8 +141,8 @@ var menuItems = []menuItemDef{
 	{label: "Redo", relY: 8, action: (*App).menuRedo, enabled: (*App).hasRedo},
 	{label: "Revert file", relY: 9, action: (*App).menuRevert, enabled: (*App).hasRevert},
 	{relY: 11, action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
-	{label: "Rename file", relY: 12, action: (*App).menuRename, enabled: (*App).hasSavableTab},
-	{label: "Delete file", relY: 13, action: (*App).menuDelete, enabled: (*App).hasSavableTab},
+	{label: "Rename file", relY: 12, action: (*App).menuRename, enabled: (*App).hasFileTab},
+	{label: "Delete file", relY: 13, action: (*App).menuDelete, enabled: (*App).hasFileTab},
 	{label: "Copy selection", relY: 15, action: (*App).menuCopy, enabled: (*App).hasSelection},
 	{label: "Cut selection", relY: 16, action: (*App).menuCut, enabled: (*App).hasSelection},
 	{label: "Paste", relY: 17, action: (*App).menuPaste, enabled: (*App).hasClipboard},
@@ -603,6 +603,12 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	if tab == nil {
 		return
 	}
+	// Image-preview tabs are read-only — no cursor, no editing, no
+	// caret movement. Drop every key here so the user can mash arrow
+	// keys without anything mysterious happening behind the splash.
+	if tab.IsImage() {
+		return
+	}
 	extend := ev.Modifiers()&tcell.ModShift != 0
 
 	switch ev.Key() {
@@ -851,10 +857,11 @@ func (a *App) tabBarClick(x, _ int) {
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
-// the caret, optionally selecting a word on double-click.
+// the caret, optionally selecting a word on double-click. Image tabs
+// have no caret, so the press is dropped.
 func (a *App) editorPress(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil {
+	if tab == nil || tab.IsImage() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -877,10 +884,11 @@ func (a *App) editorPress(x, y int) {
 // (x, y) is clamped to the editor rect so dragging into another pane still
 // extends the selection sensibly. When the mouse passes above or below the
 // editor we engage auto-scroll so the user can select content that's not
-// yet on screen — same feel as VS Code or any GUI text editor.
+// yet on screen — same feel as VS Code or any GUI text editor. Image tabs
+// drop the drag entirely.
 func (a *App) editorDrag(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil {
+	if tab == nil || tab.IsImage() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1246,8 +1254,17 @@ func (a *App) updateMenuHover(x, y int) {
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
 // hasSavableTab reports whether the active tab is one we can persist —
-// it must exist and have a path on disk (untitled tabs aren't yet supported).
+// it must exist, have a path on disk, and not be a read-only image
+// preview. Used by Save and Save & Close.
 func (a *App) hasSavableTab() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.Path != "" && !t.IsImage()
+}
+
+// hasFileTab reports whether the active tab is backed by a real file
+// (text or image). Used by Rename / Delete which act on the file
+// regardless of how the tab is rendered.
+func (a *App) hasFileTab() bool {
 	t := a.activeTabPtr()
 	return t != nil && t.Path != ""
 }
@@ -1608,13 +1625,19 @@ func (a *App) drawStatusBar() {
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
 	} else if tab := a.activeTabPtr(); tab != nil {
-		lang := detectLangLabel(tab.Path)
-		dirty := ""
-		if tab.Dirty {
-			dirty = " · ●"
+		if tab.IsImage() && tab.Image != nil {
+			b := tab.Image.Bounds()
+			left = fmt.Sprintf(" %s · %d×%d · %s",
+				strings.ToUpper(tab.ImageFmt), b.Dx(), b.Dy(), filepath.Base(tab.Path))
+		} else {
+			lang := detectLangLabel(tab.Path)
+			dirty := ""
+			if tab.Dirty {
+				dirty = " · ●"
+			}
+			left = fmt.Sprintf(" %s · Ln %d, Col %d · %d lines%s",
+				lang, tab.Cursor.Line+1, tab.Cursor.Col+1, tab.Buffer.LineCount(), dirty)
 		}
-		left = fmt.Sprintf(" %s · Ln %d, Col %d · %d lines%s",
-			lang, tab.Cursor.Line+1, tab.Cursor.Col+1, tab.Buffer.LineCount(), dirty)
 	} else {
 		left = " " + filepath.Base(a.rootDir)
 	}
