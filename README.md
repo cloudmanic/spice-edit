@@ -133,6 +133,31 @@ Then:
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
+### Hotkeys
+
+SpiceEdit deliberately avoids `Ctrl+`-style shortcuts (they fight `tmux`,
+`zellij`, and the terminal itself — `Ctrl+S` is XOFF flow control on a
+real terminal). Instead, **`Esc` is the leader key**: tap `Esc`, then
+within half a second tap one of the letters below.
+
+| Combo       | Action          |
+| ----------- | --------------- |
+| `Esc Esc`   | Open ≡ menu     |
+| `Esc s`     | Save            |
+| `Esc u`     | Undo            |
+| `Esc r`     | Redo            |
+| `Esc w`     | Close tab       |
+| `Esc q`     | Quit            |
+| `Esc n`     | New file        |
+| `Esc t`     | Toggle sidebar  |
+
+A lone `Esc` is harmless — if you don't follow it with a bound letter
+within the window, your next keystroke goes to the editor as normal,
+so accidental `Esc` taps never swallow a real character.
+
+Everything reachable by hotkey is also reachable from the `≡` menu —
+the hotkeys are just a faster path for the actions you reach for most.
+
 ## Custom actions (open remote files on your laptop)
 
 [![Watch the walkthrough](https://img.youtube.com/vi/vDWZWEmIiZ8/maxresdefault.jpg)](https://www.youtube.com/watch?v=vDWZWEmIiZ8)
