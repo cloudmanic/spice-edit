@@ -270,9 +270,31 @@ func New(rootDir string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 	}
 	a.setActiveFolder(tree.Root.Path)
+	a.refreshGitStatus()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
 	return a, nil
+}
+
+// refreshGitStatus re-runs `git status --porcelain` against the project
+// root and stamps the resulting dirty-paths sets onto the file tree, so
+// changed files render in the Modified color on the next draw. It's
+// cheap (a couple of forks) but not free — we only call it from the
+// 10-second tree-refresh tick and right after our own file operations,
+// not on every keystroke. A non-git project leaves the tree's dirty
+// maps empty, which the renderer treats as "everything clean".
+func (a *App) refreshGitStatus() {
+	if a.tree == nil {
+		return
+	}
+	st := loadGitStatus(a.rootDir)
+	if !st.IsRepo {
+		a.tree.DirtyFiles = nil
+		a.tree.DirtyFolders = nil
+		return
+	}
+	a.tree.DirtyFiles = st.DirtyFiles
+	a.tree.DirtyFolders = dirtyFolderSet(st.DirtyFiles, a.rootDir)
 }
 
 // startTreeRefresh launches a goroutine that posts a treeRefreshEvent every
@@ -349,6 +371,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 	case *treeRefreshEvent:
 		a.tree.Refresh()
 		a.reconcileOpenTabsWithDisk()
+		a.refreshGitStatus()
 	}
 }
 
@@ -1059,6 +1082,7 @@ func (a *App) saveActiveTab() {
 		a.flash(fmt.Sprintf("Save failed: %v", err))
 		return
 	}
+	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s", filepath.Base(tab.Path)))
 }
 
@@ -1252,6 +1276,7 @@ func (a *App) menuSaveAndClose() {
 		a.flash(fmt.Sprintf("Save failed: %v", err))
 		return
 	}
+	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s — closed", filepath.Base(tab.Path)))
 	a.closeTab(a.activeTab)
 }

@@ -48,6 +48,15 @@ type Tree struct {
 	// always visible. The app updates this whenever the user clicks a
 	// tree node or opens a file.
 	ActiveFolder string
+
+	// DirtyFiles and DirtyFolders carry the project's git status — both
+	// indexed by absolute path. Files in DirtyFiles render in the theme's
+	// Modified color; folders in DirtyFolders do the same so a collapsed
+	// branch still signals there's a change inside. Both maps are nil
+	// when the project isn't a git repo or when git status hasn't been
+	// loaded yet, and the renderer treats nil as "everything clean".
+	DirtyFiles   map[string]bool
+	DirtyFolders map[string]bool
 }
 
 // New creates a tree rooted at root and pre-loads its top-level children so
@@ -222,17 +231,35 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 		item := flat[idx]
 		active := item.Node.IsDir && item.Node.Path == t.ActiveFolder
-		drawNodeRow(scr, th, x, listTop+row, w, item, active)
+		dirty := t.isDirty(item.Node)
+		drawNodeRow(scr, th, x, listTop+row, w, item, active, dirty)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
 }
 
+// isDirty reports whether a node should render in the Modified color —
+// either because the file itself has uncommitted changes or because a
+// folder somewhere below it does. Returns false for any node when git
+// status hasn't been loaded.
+func (t *Tree) isDirty(n *Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.IsDir {
+		return t.DirtyFolders[n.Path]
+	}
+	return t.DirtyFiles[n.Path]
+}
+
 // drawNodeRow renders one tree row with proper indent, chevron, and color.
 // active=true marks this folder as the editor's current working folder
 // (the New File default), and is drawn bold + accent-tinted so the user
-// can see at a glance where the next "New file" will land.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool) {
+// can see at a glance where the next "New file" will land. dirty=true
+// marks the node as having uncommitted git changes (or, for folders,
+// containing some) — it overrides the normal foreground with the
+// theme's Modified color so changed files stand out at a glance.
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active, dirty bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 	var line string
@@ -250,6 +277,12 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	} else {
 		line = " " + indent + "  " + item.Node.Name
 		fg = th.FileColor
+	}
+	// Dirty wins over the normal foreground but the active-folder bold
+	// stays — the user still wants to see *which* changed folder is the
+	// current target.
+	if dirty {
+		fg = th.Modified
 	}
 	style := tcell.StyleDefault.Background(bg).Foreground(fg)
 	if active {

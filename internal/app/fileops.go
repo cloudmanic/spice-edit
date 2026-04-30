@@ -104,6 +104,7 @@ func (a *App) doCreateFile(parent, name string) {
 		return
 	}
 	a.tree.Refresh()
+	a.refreshGitStatus()
 	a.openFile(target)
 	a.flash(fmt.Sprintf("Created %s", name))
 }
@@ -138,6 +139,7 @@ func (a *App) doRenameFile(oldPath, newName string) {
 		}
 	}
 	a.tree.Refresh()
+	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Renamed to %s", newName))
 }
 
@@ -154,6 +156,7 @@ func (a *App) doDeleteFile(path string) {
 		}
 	}
 	a.tree.Refresh()
+	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Deleted %s", filepath.Base(path)))
 }
 
