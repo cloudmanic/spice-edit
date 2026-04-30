@@ -660,7 +660,8 @@ func (a *App) menuModalRect() (x, y, w, h int) {
 // handleKey responds to keyboard events. There are intentionally no Ctrl-
 // based shortcuts: every action lives behind the ≡ menu so the editor never
 // fights the terminal (Ctrl-S/Q flow control) or a tmux/zellij prefix. The
-// only "command" key is Esc, which closes the menu.
+// only "command" key is Esc, which closes the menu and acts as the leader
+// for the hotkey table in leader.go (Esc s = Save, Esc u = Undo, etc.).
 func (a *App) handleKey(ev *tcell.EventKey) {
 	// Secondary modals own the keyboard while they're up. Each handler
 	// understands Esc (cancel), Enter (submit / activate), and the keys
@@ -682,9 +683,11 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
 		//   • menu open  → close it
-		//   • menu shut  → open it on the SECOND Esc within doubleEscMs.
-		// Single Esc with the menu shut is intentionally a no-op so the
-		// key feels harmless to mash.
+		//   • menu shut  → open it on the SECOND Esc within doubleEscMs;
+		//     a SINGLE Esc arms the leader table (see below).
+		// A lone Esc that isn't followed by a leader binding within the
+		// window is intentionally a no-op so the key still feels harmless
+		// to mash.
 		if a.menuOpen {
 			a.closeMenu()
 			a.lastEscape = time.Time{}
@@ -698,6 +701,19 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		}
 		a.lastEscape = now
 		return
+	}
+	// Esc-leader hotkey: if Esc was pressed within doubleEscMs and this
+	// key is bound in the leader table, fire the action and consume the
+	// keystroke. Unbound keys fall through to normal handling so a stray
+	// Esc doesn't swallow the next character the user types.
+	if !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs {
+		if ev.Key() == tcell.KeyRune {
+			if action := leaderActionFor(ev.Rune()); action != nil {
+				a.lastEscape = time.Time{}
+				action(a)
+				return
+			}
+		}
 	}
 	// Any other key cancels a pending Esc so a stale half-tap doesn't
 	// surprise the user later.
