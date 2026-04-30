@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -36,6 +37,16 @@ type Tab struct {
 	Styles     [][]tcell.Style
 	StyleStale bool
 
+	// Mtime is the file's modification time as of the last successful
+	// read or write. The app's periodic disk-reconcile loop compares it
+	// against the live mtime to detect external edits.
+	Mtime time.Time
+
+	// DiskGone is set when the most recent disk check found the file
+	// missing. It exists so we only flash the "deleted on disk" warning
+	// once, instead of re-flashing every reconcile tick.
+	DiskGone bool
+
 	// cursorMoved is set by every method that changes Cursor; Render
 	// consumes it to decide whether to scroll the viewport so the cursor
 	// is visible. Without this flag, mouse-wheel scrolling is fought by
@@ -48,17 +59,25 @@ type Tab struct {
 // matching what most editors do when you "open" a brand-new file path.
 func NewTab(path string) (*Tab, error) {
 	var data []byte
+	var mtime time.Time
 	if path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
 		data = b
+		// Record the on-disk mtime so the app can detect external edits
+		// later. A missing file leaves mtime as the zero value, which is
+		// fine — the reconcile loop handles that case explicitly.
+		if info, statErr := os.Stat(path); statErr == nil {
+			mtime = info.ModTime()
+		}
 	}
 	return &Tab{
 		Path:       path,
 		Buffer:     NewBuffer(string(data)),
 		StyleStale: true,
+		Mtime:      mtime,
 	}, nil
 }
 
@@ -71,7 +90,9 @@ func (t *Tab) DisplayName() string {
 }
 
 // Save writes the buffer to disk and clears Dirty. It is an error to call
-// Save on an untitled tab — callers should prompt for a path first.
+// Save on an untitled tab — callers should prompt for a path first. Mtime
+// is refreshed so the disk-reconcile loop doesn't immediately think the
+// file we just wrote was changed by someone else.
 func (t *Tab) Save() error {
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
@@ -80,6 +101,38 @@ func (t *Tab) Save() error {
 		return err
 	}
 	t.Dirty = false
+	t.DiskGone = false
+	if info, err := os.Stat(t.Path); err == nil {
+		t.Mtime = info.ModTime()
+	}
+	return nil
+}
+
+// Reload re-reads the file from disk into the buffer. Cursor and anchor
+// are clamped to the new content (so the user keeps roughly their place
+// instead of getting snapped to line 0); ScrollY is left alone and gets
+// clamped on the next render. Dirty is cleared and the syntax cache is
+// invalidated.
+func (t *Tab) Reload() error {
+	if t.Path == "" {
+		return fmt.Errorf("no path set for tab")
+	}
+	data, err := os.ReadFile(t.Path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(t.Path)
+	if err != nil {
+		return err
+	}
+	t.Buffer = NewBuffer(string(data))
+	t.Cursor = t.Buffer.Clamp(t.Cursor)
+	t.Anchor = t.Cursor // drop any selection — line indices may have shifted.
+	t.Dirty = false
+	t.DiskGone = false
+	t.Mtime = info.ModTime()
+	t.StyleStale = true
+	t.cursorMoved = true
 	return nil
 }
 

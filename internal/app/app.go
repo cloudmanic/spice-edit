@@ -19,6 +19,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -282,6 +283,61 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleAutoScroll()
 	case *treeRefreshEvent:
 		a.tree.Refresh()
+		a.reconcileOpenTabsWithDisk()
+	}
+}
+
+// reconcileOpenTabsWithDisk runs once per background tick. For every
+// open tab with a real path it stats the file, compares the on-disk
+// mtime to what the tab last knew, and reacts:
+//
+//   - File missing  → flash once, mark the tab dirty so the user knows.
+//   - Disk newer, tab clean → reload the buffer silently, flash success.
+//   - Disk newer, tab dirty → leave the buffer alone, flash a warning
+//     that saving will overwrite.
+//
+// Untitled tabs (Path == "") are skipped because there's no disk file to
+// reconcile against.
+func (a *App) reconcileOpenTabsWithDisk() {
+	for _, tab := range a.tabs {
+		if tab.Path == "" {
+			continue
+		}
+		info, err := os.Stat(tab.Path)
+		if os.IsNotExist(err) {
+			if !tab.DiskGone {
+				tab.DiskGone = true
+				tab.Dirty = true
+				a.flash(fmt.Sprintf("%s deleted on disk", filepath.Base(tab.Path)))
+			}
+			continue
+		}
+		if err != nil {
+			// Permission denied or some other transient stat error — leave
+			// the tab as-is rather than spamming the user with a flash.
+			continue
+		}
+		if tab.DiskGone {
+			// File reappeared. Force the mtime check below to fire so we
+			// either reload or warn about a dirty conflict.
+			tab.DiskGone = false
+			tab.Mtime = time.Time{}
+		}
+		if !info.ModTime().After(tab.Mtime) {
+			continue // unchanged on disk.
+		}
+		if tab.Dirty {
+			a.flash(fmt.Sprintf("%s changed on disk — your edits will overwrite on save",
+				filepath.Base(tab.Path)))
+			// Update Mtime so we don't re-flash every tick for the same change.
+			tab.Mtime = info.ModTime()
+			continue
+		}
+		if err := tab.Reload(); err != nil {
+			a.flash(fmt.Sprintf("%s reload failed: %v", filepath.Base(tab.Path), err))
+			continue
+		}
+		a.flash(fmt.Sprintf("%s reloaded from disk", filepath.Base(tab.Path)))
 	}
 }
 
