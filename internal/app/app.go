@@ -43,6 +43,12 @@ const (
 	wheelLines     = 3
 	tabIndent      = "    " // 4 spaces — opinionated.
 
+	// treeRefreshInterval is how often the background goroutine kicks off
+	// a file-tree reload so the sidebar stays in sync with on-disk changes
+	// made by other tools (git, mv, another tmux pane, etc.). 10s feels
+	// "fresh enough" while costing only a handful of ReadDir syscalls.
+	treeRefreshInterval = 10 * time.Second
+
 	// menuButtonWidth is how many cells the ≡ icon occupies at the top-left
 	// of the tab bar. Tabs render starting just after it.
 	menuButtonWidth = 4
@@ -69,6 +75,16 @@ type autoScrollEvent struct {
 
 // When satisfies the tcell.Event interface.
 func (e *autoScrollEvent) When() time.Time { return e.when }
+
+// treeRefreshEvent is the custom tcell event the background tree-refresh
+// goroutine posts every treeRefreshInterval. The main loop reacts by
+// asking the file tree to re-read every loaded directory.
+type treeRefreshEvent struct {
+	when time.Time
+}
+
+// When satisfies the tcell.Event interface.
+func (e *treeRefreshEvent) When() time.Time { return e.when }
 
 // tabRect remembers where each tab was drawn so click handling can hit-test
 // against the actual rendered geometry rather than re-deriving it.
@@ -106,6 +122,12 @@ var menuItems = []menuItemDef{
 	{"Copy selection", 7, (*App).menuCopy, (*App).hasSelection},
 	{"Cut selection", 8, (*App).menuCut, (*App).hasSelection},
 	{"Paste", 9, (*App).menuPaste, (*App).hasClipboard},
+	// Manual tree refresh — disabled in favour of the 10s background poller,
+	// but left here (and menuRefreshTree below) so we can drop it back into
+	// the menu by uncommenting these two pieces. To re-enable: bump
+	// modalHeight to 15, change Quit's relY to 13, and add 12 to the
+	// dividers slice in drawMenu.
+	// {"Refresh tree", 11, (*App).menuRefreshTree, alwaysTrue},
 	{"Quit editor", 11, (*App).menuQuit, alwaysTrue},
 }
 
@@ -146,6 +168,9 @@ type App struct {
 	lastDragX      int
 	lastDragY      int
 
+	// treeRefreshStop signals the background tree-refresh goroutine to exit.
+	treeRefreshStop chan struct{}
+
 	quit bool
 }
 
@@ -180,11 +205,45 @@ func New(rootDir string) (*App, error) {
 		hoveredMenuRow:  -1,
 	}
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
+	a.startTreeRefresh()
 	return a, nil
+}
+
+// startTreeRefresh launches a goroutine that posts a treeRefreshEvent every
+// treeRefreshInterval. The main event loop reacts by calling tree.Refresh,
+// which keeps the sidebar in sync with on-disk changes from outside the
+// editor (git, mv, another tmux pane, etc.).
+func (a *App) startTreeRefresh() {
+	a.treeRefreshStop = make(chan struct{})
+	stop := a.treeRefreshStop
+	scr := a.screen
+	go func() {
+		ticker := time.NewTicker(treeRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case t := <-ticker.C:
+				_ = scr.PostEvent(&treeRefreshEvent{when: t})
+			}
+		}
+	}()
+}
+
+// stopTreeRefresh signals the background tree-refresh goroutine to exit.
+// Safe to call multiple times.
+func (a *App) stopTreeRefresh() {
+	if a.treeRefreshStop != nil {
+		close(a.treeRefreshStop)
+		a.treeRefreshStop = nil
+	}
 }
 
 // Close releases the terminal back to the user. Always call this before exit.
 func (a *App) Close() {
+	a.stopTreeRefresh()
+	a.stopAutoScroll()
 	if a.screen != nil {
 		a.screen.Fini()
 	}
@@ -221,6 +280,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleMouse(e)
 	case *autoScrollEvent:
 		a.handleAutoScroll()
+	case *treeRefreshEvent:
+		a.tree.Refresh()
 	}
 }
 
@@ -956,6 +1017,16 @@ func (a *App) menuCut() {
 func (a *App) menuPaste() {
 	a.closeMenu()
 	a.pasteClipboard()
+}
+
+// menuRefreshTree forces an immediate sidebar reload. Currently unwired
+// from the menu — the 10s background poller covers the common case — but
+// the method is kept so re-adding the menu row (see menuItems) only
+// requires uncommenting one line.
+func (a *App) menuRefreshTree() {
+	a.closeMenu()
+	a.tree.Refresh()
+	a.flash("File tree refreshed")
 }
 
 // menuQuit exits the editor.

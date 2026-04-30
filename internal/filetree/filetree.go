@@ -65,28 +65,48 @@ func New(root string) (*Tree, error) {
 	return &Tree{Root: n}, nil
 }
 
-// loadChildren reads directory entries from disk and builds child Nodes.
-// Directories are sorted first, then files; both alphabetically (case-
-// insensitive). Hidden files are included on purpose — see the package doc.
+// loadChildren is the lazy-load entry point used the first time a directory
+// is expanded. It defers to reload, which knows how to merge fresh disk
+// state with whatever (if anything) we already had cached.
 func loadChildren(n *Node) error {
 	if !n.IsDir || n.Loaded {
+		return nil
+	}
+	return n.reload()
+}
+
+// reload re-reads the directory's children from disk and replaces n.Children
+// with the new list. Existing child Nodes whose names still appear on disk
+// are kept by-pointer so their Expanded state, loaded grandchildren, etc.
+// survive a refresh. New names get fresh Nodes; vanished names are dropped.
+func (n *Node) reload() error {
+	if !n.IsDir {
 		return nil
 	}
 	entries, err := os.ReadDir(n.Path)
 	if err != nil {
 		return err
 	}
+
+	existing := make(map[string]*Node, len(n.Children))
+	for _, c := range n.Children {
+		existing[c.Name] = c
+	}
+
 	children := make([]*Node, 0, len(entries))
 	for _, e := range entries {
 		if shouldHide(e.Name()) {
 			continue
 		}
-		c := &Node{
+		if old, ok := existing[e.Name()]; ok && old.IsDir == e.IsDir() {
+			children = append(children, old)
+			continue
+		}
+		children = append(children, &Node{
 			Path:  filepath.Join(n.Path, e.Name()),
 			Name:  e.Name(),
 			IsDir: e.IsDir(),
-		}
-		children = append(children, c)
+		})
 	}
 	sort.SliceStable(children, func(i, j int) bool {
 		if children[i].IsDir != children[j].IsDir {
@@ -97,6 +117,27 @@ func loadChildren(n *Node) error {
 	n.Children = children
 	n.Loaded = true
 	return nil
+}
+
+// Refresh re-reads every directory in the tree that has been loaded at
+// least once (i.e. anywhere the user has previously expanded). Surviving
+// entries keep their Node pointers so deeper Expanded state is preserved;
+// new files appear, deleted files vanish.
+func (t *Tree) Refresh() {
+	refreshNode(t.Root)
+}
+
+// refreshNode is Tree.Refresh's recursive worker. It reloads only Loaded
+// directories — there's no value in reading directories the user has
+// never seen.
+func refreshNode(n *Node) {
+	if !n.IsDir || !n.Loaded {
+		return
+	}
+	_ = n.reload()
+	for _, c := range n.Children {
+		refreshNode(c)
+	}
 }
 
 // shouldHide is the project's small, opinionated list of names the file
