@@ -30,6 +30,7 @@ import (
 	"github.com/cloudmanic/spiceedit/internal/editor"
 	"github.com/cloudmanic/spiceedit/internal/filetree"
 	"github.com/cloudmanic/spiceedit/internal/theme"
+	"github.com/cloudmanic/spiceedit/internal/version"
 )
 
 // Layout, behavior, and feel constants. Constants instead of config —
@@ -1348,6 +1349,17 @@ func (a *App) drawMenu() {
 	drawAt(a.screen, mx+1, my+1, " Menu", titleStyle)
 	hint := "esc "
 	drawAt(a.screen, mx+mw-1-len([]rune(hint)), my+1, hint, mutedStyle)
+
+	// Version stamp baked into the bottom border, right-aligned. A small
+	// pad of dashes is left between the version text and the corner so it
+	// reads as part of the frame rather than a label awkwardly butted up
+	// against the border.
+	verLabel := " v" + version.Version + " "
+	verLen := len([]rune(verLabel))
+	verX := mx + mw - 2 - verLen
+	if verX > mx+1 {
+		drawAt(a.screen, verX, my+mh-1, verLabel, mutedStyle)
+	}
 
 	// Action rows. Hovered (enabled) rows get a tinted full-width
 	// background so they read like a hovered button in a GUI menu.
