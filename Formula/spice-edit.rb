@@ -5,21 +5,21 @@
 class SpiceEdit < Formula
   desc "SpiceEdit — opinionated mouse-first terminal code editor."
   homepage "https://github.com/cloudmanic/spice-edit"
-  version "0.0.2"
+  version "0.0.3"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.2/spiceedit_0.0.2_darwin_amd64.tar.gz"
-      sha256 "54e455b5cb47b47104c0291d388e1107329c6162cf78734a648d6b5c626da239"
+      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.3/spiceedit_0.0.3_darwin_amd64.tar.gz"
+      sha256 "dcf3dcc2c0555de59143918903383e399b1877c629660fbb2771bd6f66034194"
 
       define_method(:install) do
         bin.install "spiceedit"
       end
     end
     if Hardware::CPU.arm?
-      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.2/spiceedit_0.0.2_darwin_arm64.tar.gz"
-      sha256 "290c93bf4dec1c8bfd05c839cd31a70c36839443b57b303471adc38381120dde"
+      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.3/spiceedit_0.0.3_darwin_arm64.tar.gz"
+      sha256 "085a49bfffc6ac639c05c930f7f6e69b8d3acb89a7b1ddd914c69b3d741b39e3"
 
       define_method(:install) do
         bin.install "spiceedit"
@@ -29,15 +29,15 @@ class SpiceEdit < Formula
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.2/spiceedit_0.0.2_linux_amd64.tar.gz"
-      sha256 "6548e89c13ff755efb6bcee3a6d19a8fef513e7ef47eee2677a44b6516593ea9"
+      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.3/spiceedit_0.0.3_linux_amd64.tar.gz"
+      sha256 "c8bb8ff553bfc9661d1fd6ad4ee94a87b7ccac79873c77b293dea70f01756177"
       define_method(:install) do
         bin.install "spiceedit"
       end
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.2/spiceedit_0.0.2_linux_arm64.tar.gz"
-      sha256 "63044e880ab77cbae5025b06c79dcf8ed8d9e68b129beb65d136e6c3cad99780"
+      url "https://github.com/cloudmanic/spice-edit/releases/download/v0.0.3/spiceedit_0.0.3_linux_arm64.tar.gz"
+      sha256 "d317c5e2d57c59211e5f9dad4503a7b02121c6cc3a3a5d0275b3ce991de0d23e"
       define_method(:install) do
         bin.install "spiceedit"
       end
