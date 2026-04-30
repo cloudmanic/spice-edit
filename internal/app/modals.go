@@ -55,6 +55,7 @@ func (a *App) closeAllModals() {
 	a.promptOpen = false
 	a.confirmOpen = false
 	a.contextOpen = false
+	a.dirtyOpen = false
 	a.findOpen = false
 	a.findValue = nil
 	a.findCursor = 0
@@ -64,6 +65,8 @@ func (a *App) closeAllModals() {
 	a.contextItems = nil
 	a.promptCallback = nil
 	a.confirmCallback = nil
+	a.dirtySaveCallback = nil
+	a.dirtyDiscardCallback = nil
 	a.dragMode = ""
 	a.stopAutoScroll()
 }
@@ -75,7 +78,7 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.findOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.findOpen
 }
 
 // -----------------------------------------------------------------------------
@@ -462,6 +465,225 @@ func (a *App) drawConfirm() {
 	// Buttons. Default focus is No so an accidental Enter is non-destructive.
 	drawButton(a.screen, mx+14, my+5, "[  No  ]", bg, a.theme.Text, a.confirmHover == 0)
 	drawButton(a.screen, mx+28, my+5, "[ Yes ]", bg, a.theme.Error, a.confirmHover == 1)
+
+	a.screen.HideCursor()
+}
+
+// -----------------------------------------------------------------------------
+// Save / Discard / Cancel modal (unsaved-changes prompt)
+// -----------------------------------------------------------------------------
+
+// dirtyModalWidth and dirtyModalHeight pin the unsaved-changes modal's
+// geometry. Wider than the Yes/No confirm so the three buttons sit
+// comfortably on one row with breathing space between them.
+const (
+	dirtyModalWidth  = 60
+	dirtyModalHeight = 9
+)
+
+// Button column origins for the dirty-close modal, kept in one place so
+// the draw function and the click hit-tester agree on geometry. The
+// buttons are laid out as: [ Cancel ] [ Discard ] [ Save ]; spacing is
+// chosen to center the trio inside the 60-cell modal.
+const (
+	dirtyBtnCancelX  = 5
+	dirtyBtnCancelW  = 10 // "[ Cancel ]"
+	dirtyBtnDiscardX = 22
+	dirtyBtnDiscardW = 11 // "[ Discard ]"
+	dirtyBtnSaveX    = 42
+	dirtyBtnSaveW    = 8 // "[ Save ]"
+)
+
+// openDirtyClose shows the unsaved-changes modal. saveCB runs when the
+// user picks Save (typically: save the tab(s), then proceed); discardCB
+// runs when the user picks Discard (skip saving, proceed anyway). Cancel
+// just dismisses without running anything. Default focus is Cancel so a
+// stray Enter is non-destructive — same safety pattern the delete confirm
+// uses.
+func (a *App) openDirtyClose(title, message string, saveCB, discardCB func(*App)) {
+	a.closeAllModals()
+	a.dirtyOpen = true
+	a.dirtyTitle = title
+	a.dirtyMessage = message
+	a.dirtyHover = 0 // Cancel
+	a.dirtySaveCallback = saveCB
+	a.dirtyDiscardCallback = discardCB
+}
+
+// dirtyCancel dismisses the modal without running anything.
+func (a *App) dirtyCancel() {
+	a.closeAllModals()
+}
+
+// dirtyDiscard runs the discard callback and dismisses the modal. The
+// callback is captured before the close so closeAllModals can clear the
+// pointer without losing the handler we're about to fire.
+func (a *App) dirtyDiscard() {
+	if !a.dirtyOpen {
+		return
+	}
+	cb := a.dirtyDiscardCallback
+	a.closeAllModals()
+	if cb != nil {
+		cb(a)
+	}
+}
+
+// dirtySave runs the save callback and dismisses the modal. Same
+// capture-then-close pattern as dirtyDiscard.
+func (a *App) dirtySave() {
+	if !a.dirtyOpen {
+		return
+	}
+	cb := a.dirtySaveCallback
+	a.closeAllModals()
+	if cb != nil {
+		cb(a)
+	}
+}
+
+// dirtyActivate runs the focused button's action — used by Enter and by
+// keyboard-driven activations.
+func (a *App) dirtyActivate() {
+	switch a.dirtyHover {
+	case 0:
+		a.dirtyCancel()
+	case 1:
+		a.dirtyDiscard()
+	case 2:
+		a.dirtySave()
+	}
+}
+
+// handleDirtyKey processes keyboard input while the dirty-close modal
+// is open. Left/Right and Tab cycle focus across the three buttons;
+// Enter activates the focused button; Esc cancels.
+func (a *App) handleDirtyKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEsc:
+		a.dirtyCancel()
+	case tcell.KeyEnter:
+		a.dirtyActivate()
+	case tcell.KeyLeft:
+		if a.dirtyHover > 0 {
+			a.dirtyHover--
+		}
+	case tcell.KeyRight:
+		if a.dirtyHover < 2 {
+			a.dirtyHover++
+		}
+	case tcell.KeyTab:
+		a.dirtyHover = (a.dirtyHover + 1) % 3
+	}
+}
+
+// handleDirtyMouse processes mouse input for the dirty-close modal.
+// Hovering a button highlights it; clicking activates. A click outside
+// the modal cancels — same as the confirm modal.
+func (a *App) handleDirtyMouse(x, y int, btn tcell.ButtonMask) {
+	mx, my, mw, mh := a.dirtyModalRect()
+	// Hover tracking — works for any move with a button bit set or not.
+	if x >= mx && x < mx+mw && y == my+5 {
+		switch idx := dirtyButtonAtRelX(x - mx); idx {
+		case 0, 1, 2:
+			a.dirtyHover = idx
+		}
+	}
+	if btn&tcell.Button1 == 0 {
+		return
+	}
+	if x < mx || x >= mx+mw || y < my || y >= my+mh {
+		a.dirtyCancel()
+		return
+	}
+	if y == my+5 {
+		switch dirtyButtonAtRelX(x - mx) {
+		case 0:
+			a.dirtyCancel()
+		case 1:
+			a.dirtyDiscard()
+		case 2:
+			a.dirtySave()
+		}
+	}
+}
+
+// dirtyButtonAtRelX maps an x offset within the modal to a button index
+// (0=Cancel, 1=Discard, 2=Save) or -1 when the offset misses every
+// button. Pulled out so the keyboard-free hover and the click handler
+// share one geometry source.
+func dirtyButtonAtRelX(rx int) int {
+	switch {
+	case rx >= dirtyBtnCancelX && rx < dirtyBtnCancelX+dirtyBtnCancelW:
+		return 0
+	case rx >= dirtyBtnDiscardX && rx < dirtyBtnDiscardX+dirtyBtnDiscardW:
+		return 1
+	case rx >= dirtyBtnSaveX && rx < dirtyBtnSaveX+dirtyBtnSaveW:
+		return 2
+	}
+	return -1
+}
+
+// dirtyModalRect returns the on-screen rectangle of the dirty-close
+// modal, centered in the window.
+func (a *App) dirtyModalRect() (x, y, w, h int) {
+	w = dirtyModalWidth
+	h = dirtyModalHeight
+	x = (a.width - w) / 2
+	y = (a.height - h) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	return
+}
+
+// drawDirtyClose renders the Save / Discard / Cancel modal.
+//
+// Rows (relY):
+//
+//	0   top border
+//	1   title — "<title>   esc"
+//	2   divider
+//	3   blank
+//	4   message (centered)
+//	5   buttons    [ Cancel ]    [ Discard ]    [ Save ]
+//	6   blank
+//	7   blank
+//	8   bottom border
+func (a *App) drawDirtyClose() {
+	mx, my, mw, mh := a.dirtyModalRect()
+
+	bg := a.theme.LineHL
+	bgStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Text)
+	borderStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Subtle)
+	titleStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Accent).Bold(true)
+	mutedStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Muted)
+	bodyStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Text)
+
+	fillRect(a.screen, mx, my, mw, mh, bgStyle)
+	drawBorder(a.screen, mx, my, mw, mh, borderStyle)
+	drawHDivider(a.screen, mx, my+2, mw, borderStyle)
+
+	drawAt(a.screen, mx+1, my+1, " "+a.dirtyTitle, titleStyle)
+	hint := "esc "
+	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+
+	// Message — centered, truncated if too long.
+	msg := a.dirtyMessage
+	if runeLen(msg) > mw-4 {
+		msg = msg[:mw-4]
+	}
+	mxText := mx + (mw-runeLen(msg))/2
+	drawAt(a.screen, mxText, my+4, msg, bodyStyle)
+
+	// Buttons. Cancel is neutral, Discard is red (destructive),
+	// Save is the editor's accent so it reads as the productive default.
+	drawButton(a.screen, mx+dirtyBtnCancelX, my+5, "[ Cancel ]", bg, a.theme.Text, a.dirtyHover == 0)
+	drawButton(a.screen, mx+dirtyBtnDiscardX, my+5, "[ Discard ]", bg, a.theme.Error, a.dirtyHover == 1)
+	drawButton(a.screen, mx+dirtyBtnSaveX, my+5, "[ Save ]", bg, a.theme.Accent, a.dirtyHover == 2)
 
 	a.screen.HideCursor()
 }

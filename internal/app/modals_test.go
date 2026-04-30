@@ -791,3 +791,317 @@ func mkdir(path string) error { return os.Mkdir(path, 0755) }
 func writeFile(path, payload string) error {
 	return os.WriteFile(path, []byte(payload), 0644)
 }
+
+// -----------------------------------------------------------------------------
+// Save / Discard / Cancel modal (unsaved-changes prompt)
+// -----------------------------------------------------------------------------
+
+// seedDirtyApp opens a tab and immediately marks it dirty so each test
+// can drive the close / quit flow without re-typing the same fixture.
+func seedDirtyApp(t *testing.T) *App {
+	t.Helper()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "doc.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.activeTabPtr().InsertString(" edit") // dirty
+	return a
+}
+
+// TestOpenDirtyClose_DefaultsToCancel pins down the "an accidental
+// Enter never loses work" property: focus lands on Cancel (idx 0) when
+// the modal opens, so a stray Enter just dismisses.
+func TestOpenDirtyClose_DefaultsToCancel(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openDirtyClose("T", "M", func(*App) {}, func(*App) {})
+	if !a.dirtyOpen {
+		t.Fatal("modal should open")
+	}
+	if a.dirtyHover != 0 {
+		t.Fatalf("default focus should be Cancel (0), got %d", a.dirtyHover)
+	}
+}
+
+// TestRequestCloseTab_DirtySaveClosesTab walks the Save path: opening
+// the modal, picking Save should both write the file (dirty flag clears)
+// and close the tab.
+func TestRequestCloseTab_DirtySaveClosesTab(t *testing.T) {
+	a := seedDirtyApp(t)
+	target := a.tabs[0].Path
+
+	a.requestCloseTab(0)
+	if !a.dirtyOpen {
+		t.Fatal("dirty close should open the modal")
+	}
+	a.dirtyHover = 2 // Save
+	a.dirtyActivate()
+
+	if len(a.tabs) != 0 {
+		t.Fatalf("Save should also close the tab; %d tabs left", len(a.tabs))
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read after save: %v", err)
+	}
+	if string(got) != " editseed" {
+		t.Fatalf("unexpected file contents after save: %q", got)
+	}
+}
+
+// TestRequestCloseTab_DirtyDiscardClosesWithoutSaving is the
+// counterpart: Discard should drop the tab without touching disk.
+func TestRequestCloseTab_DirtyDiscardClosesWithoutSaving(t *testing.T) {
+	a := seedDirtyApp(t)
+	target := a.tabs[0].Path
+
+	a.requestCloseTab(0)
+	a.dirtyHover = 1 // Discard
+	a.dirtyActivate()
+
+	if len(a.tabs) != 0 {
+		t.Fatal("Discard should close the tab")
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "seed" {
+		t.Fatalf("Discard should not touch disk; got %q", got)
+	}
+}
+
+// TestRequestCloseTab_DirtyCancelKeepsTab proves Cancel leaves
+// everything alone — the tab stays open, the buffer stays dirty.
+func TestRequestCloseTab_DirtyCancelKeepsTab(t *testing.T) {
+	a := seedDirtyApp(t)
+
+	a.requestCloseTab(0)
+	a.dirtyHover = 0 // Cancel
+	a.dirtyActivate()
+
+	if len(a.tabs) != 1 {
+		t.Fatalf("Cancel should keep the tab; got %d", len(a.tabs))
+	}
+	if !a.activeTabPtr().Dirty {
+		t.Fatal("Cancel should not flip the dirty flag")
+	}
+	if a.dirtyOpen {
+		t.Fatal("Cancel should dismiss the modal")
+	}
+}
+
+// TestMenuQuit_NoDirtyTabsExitsImmediately keeps the fast path: when
+// nothing is dirty, the modal must NOT open and a.quit flips on the
+// spot.
+func TestMenuQuit_NoDirtyTabsExitsImmediately(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "clean.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.menuQuit()
+	if a.dirtyOpen {
+		t.Fatal("clean state should skip the modal")
+	}
+	if !a.quit {
+		t.Fatal("clean menuQuit should set quit")
+	}
+}
+
+// TestMenuQuit_DirtyOpensModal proves a dirty tab blocks the immediate
+// exit and routes through the Save / Discard / Cancel modal.
+func TestMenuQuit_DirtyOpensModal(t *testing.T) {
+	a := seedDirtyApp(t)
+	a.menuQuit()
+	if a.quit {
+		t.Fatal("dirty quit should not exit until the user picks an action")
+	}
+	if !a.dirtyOpen {
+		t.Fatal("dirty quit should open the modal")
+	}
+}
+
+// TestMenuQuit_DirtySaveSavesAllAndQuits drives the Save path on quit:
+// every dirty tab is written and a.quit flips. This is the test that
+// would catch a regression where Save quits without writing — losing
+// the user's edits.
+func TestMenuQuit_DirtySaveSavesAllAndQuits(t *testing.T) {
+	a := seedDirtyApp(t)
+	target := a.tabs[0].Path
+
+	a.menuQuit()
+	a.dirtyHover = 2 // Save
+	a.dirtyActivate()
+
+	if !a.quit {
+		t.Fatal("Save in quit modal should set quit")
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != " editseed" {
+		t.Fatalf("Save in quit modal should have written; got %q", got)
+	}
+}
+
+// TestMenuQuit_DirtyDiscardQuitsWithoutSaving proves Discard skips the
+// save and exits anyway.
+func TestMenuQuit_DirtyDiscardQuitsWithoutSaving(t *testing.T) {
+	a := seedDirtyApp(t)
+	target := a.tabs[0].Path
+
+	a.menuQuit()
+	a.dirtyHover = 1 // Discard
+	a.dirtyActivate()
+
+	if !a.quit {
+		t.Fatal("Discard should still quit")
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "seed" {
+		t.Fatalf("Discard must not touch disk; got %q", got)
+	}
+}
+
+// TestHandleDirtyKey_AllBranches walks Left / Right / Tab / Enter / Esc.
+// Each branch is small; pinning all of them keeps the navigation
+// behaviour stable across refactors.
+func TestHandleDirtyKey_AllBranches(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	saveCalled, discardCalled := false, false
+	a.openDirtyClose("T", "M",
+		func(*App) { saveCalled = true },
+		func(*App) { discardCalled = true })
+
+	// Right walks Cancel -> Discard -> Save and stops at Save.
+	a.handleDirtyKey(keyEv(tcell.KeyRight, 0))
+	if a.dirtyHover != 1 {
+		t.Fatalf("Right(0->1) got %d", a.dirtyHover)
+	}
+	a.handleDirtyKey(keyEv(tcell.KeyRight, 0))
+	if a.dirtyHover != 2 {
+		t.Fatalf("Right(1->2) got %d", a.dirtyHover)
+	}
+	a.handleDirtyKey(keyEv(tcell.KeyRight, 0))
+	if a.dirtyHover != 2 {
+		t.Fatalf("Right(2->2) should clamp, got %d", a.dirtyHover)
+	}
+
+	// Left walks back, also clamps at 0.
+	a.handleDirtyKey(keyEv(tcell.KeyLeft, 0))
+	a.handleDirtyKey(keyEv(tcell.KeyLeft, 0))
+	a.handleDirtyKey(keyEv(tcell.KeyLeft, 0))
+	if a.dirtyHover != 0 {
+		t.Fatalf("Left should clamp at 0, got %d", a.dirtyHover)
+	}
+
+	// Tab cycles all the way around.
+	a.handleDirtyKey(keyEv(tcell.KeyTab, 0))
+	a.handleDirtyKey(keyEv(tcell.KeyTab, 0))
+	a.handleDirtyKey(keyEv(tcell.KeyTab, 0))
+	if a.dirtyHover != 0 {
+		t.Fatalf("Tab cycle should land back on 0, got %d", a.dirtyHover)
+	}
+
+	// Enter on Cancel (default) — runs neither callback.
+	a.handleDirtyKey(keyEv(tcell.KeyEnter, 0))
+	if saveCalled || discardCalled {
+		t.Fatalf("Enter on Cancel should run neither cb (save=%v discard=%v)",
+			saveCalled, discardCalled)
+	}
+
+	// Re-open and Enter on Discard.
+	a.openDirtyClose("T", "M",
+		func(*App) { saveCalled = true },
+		func(*App) { discardCalled = true })
+	a.dirtyHover = 1
+	a.handleDirtyKey(keyEv(tcell.KeyEnter, 0))
+	if !discardCalled {
+		t.Fatal("Enter on Discard should fire discard callback")
+	}
+
+	// Re-open and Enter on Save.
+	saveCalled = false
+	a.openDirtyClose("T", "M",
+		func(*App) { saveCalled = true },
+		func(*App) {})
+	a.dirtyHover = 2
+	a.handleDirtyKey(keyEv(tcell.KeyEnter, 0))
+	if !saveCalled {
+		t.Fatal("Enter on Save should fire save callback")
+	}
+
+	// Esc dismisses without firing anything.
+	a.openDirtyClose("T", "M", func(*App) { t.Fatal("save fired on Esc") },
+		func(*App) { t.Fatal("discard fired on Esc") })
+	a.handleDirtyKey(keyEv(tcell.KeyEsc, 0))
+	if a.dirtyOpen {
+		t.Fatal("Esc should close the modal")
+	}
+}
+
+// TestSaveAllDirty_SavesEveryTab covers the multi-tab quit path: every
+// dirty tab is written; a clean tab is left alone.
+func TestSaveAllDirty_SavesEveryTab(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		full := filepath.Join(dir, name)
+		if err := os.WriteFile(full, []byte("seed"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		a.openFile(full)
+	}
+	// Dirty tabs 0 and 2; leave 1 clean.
+	a.tabs[0].Buffer.InsertString(a.tabs[0].Cursor, "x")
+	a.tabs[0].Dirty = true
+	a.tabs[2].Buffer.InsertString(a.tabs[2].Cursor, "y")
+	a.tabs[2].Dirty = true
+
+	if !a.saveAllDirty() {
+		t.Fatal("expected saveAllDirty to succeed")
+	}
+	if a.tabs[0].Dirty || a.tabs[2].Dirty {
+		t.Fatal("dirty flags should clear after save")
+	}
+}
+
+// TestDirtyTabCount counts only tabs whose Dirty flag is set.
+func TestDirtyTabCount(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		full := filepath.Join(dir, name)
+		if err := os.WriteFile(full, []byte("seed"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		a.openFile(full)
+	}
+	if got := a.dirtyTabCount(); got != 0 {
+		t.Fatalf("expected 0 dirty, got %d", got)
+	}
+	a.tabs[0].Dirty = true
+	if got := a.dirtyTabCount(); got != 1 {
+		t.Fatalf("expected 1 dirty, got %d", got)
+	}
+}
+
+// TestDirtyButtonAtRelX_HitsAndMisses pins the geometry helper so the
+// click rect math stays in sync with the draw layout.
+func TestDirtyButtonAtRelX_HitsAndMisses(t *testing.T) {
+	cases := []struct {
+		rx   int
+		want int
+	}{
+		{dirtyBtnCancelX + 1, 0},
+		{dirtyBtnDiscardX + 1, 1},
+		{dirtyBtnSaveX + 1, 2},
+		{0, -1},
+		{dirtyBtnSaveX + dirtyBtnSaveW + 5, -1},
+	}
+	for _, c := range cases {
+		if got := dirtyButtonAtRelX(c.rx); got != c.want {
+			t.Errorf("rx=%d: got %d, want %d", c.rx, got, c.want)
+		}
+	}
+}
