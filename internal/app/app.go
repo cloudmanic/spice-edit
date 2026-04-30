@@ -36,9 +36,11 @@ import (
 // Layout, behavior, and feel constants. Constants instead of config —
 // the editor is opinionated by design.
 const (
-	sidebarWidth   = 30
-	minWidth       = 50
-	minHeight      = 17
+	defaultSidebarWidth = 30
+	minSidebarWidth     = 18
+	minEditorAfterDrag  = 40
+	minWidth            = 50
+	minHeight           = 17
 	statusFlashFor = 3 * time.Second
 	doubleClickMs  = 500 * time.Millisecond
 	doubleEscMs    = 500 * time.Millisecond
@@ -158,6 +160,11 @@ type App struct {
 	// When false the editor and tab bar fill the whole window.
 	sidebarShown bool
 
+	// sidebarWidth is the live width of the file-explorer block (file tree
+	// + 1-cell splitter on its right edge), in screen cells. The user can
+	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
+	sidebarWidth int
+
 	clipBuf      string
 	statusMsg    string
 	statusUntil  time.Time
@@ -215,6 +222,7 @@ func New(rootDir string) (*App, error) {
 		pendingClose:   -1,
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
+		sidebarWidth:   defaultSidebarWidth,
 	}
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
@@ -356,22 +364,53 @@ func (a *App) reconcileOpenTabsWithDisk() {
 // Layout helpers
 // -----------------------------------------------------------------------------
 
-// sidebarW is the effective sidebar width: zero when the panel is hidden,
-// the layout constant otherwise. Every layout helper and click router that
-// used to reference sidebarWidth directly now goes through this so toggling
-// the panel reshapes the entire UI in one place.
+// sidebarW is the effective width of the sidebar block (file tree +
+// splitter): zero when hidden, a.sidebarWidth otherwise. Every layout
+// helper and click router goes through this so toggling/resizing the
+// panel reshapes the entire UI in one place.
 func (a *App) sidebarW() int {
 	if !a.sidebarShown {
 		return 0
 	}
-	return sidebarWidth
+	return a.sidebarWidth
 }
 
-// sidebarRect returns the file tree panel's screen rectangle. When the
-// sidebar is hidden the returned rect has zero width — the caller should
-// also consult a.sidebarShown before drawing into it.
+// sidebarRect returns the file tree's render rectangle (one column
+// narrower than the sidebar block — the rightmost column belongs to the
+// resize splitter). Zero width when the sidebar is hidden.
 func (a *App) sidebarRect() (x, y, w, h int) {
-	return 0, 0, a.sidebarW(), a.height - 1
+	sw := a.sidebarW()
+	if sw <= 0 {
+		return 0, 0, 0, 0
+	}
+	return 0, 0, sw - 1, a.height - 1
+}
+
+// splitterX returns the x coordinate of the resize splitter column, or -1
+// when the sidebar is hidden (no splitter to draw or click).
+func (a *App) splitterX() int {
+	if !a.sidebarShown {
+		return -1
+	}
+	return a.sidebarWidth - 1
+}
+
+// resizeSidebar applies the user's desired sidebar width while clamping it
+// to a sensible range — the file tree stays wide enough to read names and
+// the editor keeps at least minEditorAfterDrag columns. Tiny windows that
+// can't satisfy both fall back to the minimum and let the editor shrink.
+func (a *App) resizeSidebar(target int) {
+	if target < minSidebarWidth {
+		target = minSidebarWidth
+	}
+	max := a.width - minEditorAfterDrag
+	if max < minSidebarWidth {
+		max = minSidebarWidth
+	}
+	if target > max {
+		target = max
+	}
+	a.sidebarWidth = target
 }
 
 // tabBarRect returns the tab bar's screen rectangle (one row tall).
@@ -553,11 +592,21 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// Sidebar resize drag: keep the splitter glued to the mouse x so the
+	// panel reshapes live as the user drags.
+	if leftDown && a.dragMode == "sidebar" {
+		a.resizeSidebar(x + 1)
+		return
+	}
+
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
 		sw := a.sidebarW()
+		splitX := a.splitterX()
 		switch {
-		case sw > 0 && x < sw:
+		case splitX >= 0 && x == splitX:
+			a.dragMode = "sidebar"
+		case sw > 0 && x < splitX:
 			a.sidebarClick(x, y)
 		case y == 0:
 			a.tabBarClick(x, y)
@@ -1154,6 +1203,7 @@ func (a *App) draw() {
 	if a.sidebarShown {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+		a.drawSplitter()
 	}
 
 	a.drawTabBar()
@@ -1248,6 +1298,24 @@ func (a *App) drawTabBar() {
 			}
 			a.screen.SetContent(col, ty, '×', nil, closeStyle)
 		}
+	}
+}
+
+// drawSplitter paints a 1-column vertical line at the right edge of the
+// sidebar. Idle it sits in Subtle grey; while the user is dragging it
+// brightens to Accent so the active grab handle is unmistakable.
+func (a *App) drawSplitter() {
+	x := a.splitterX()
+	if x < 0 {
+		return
+	}
+	fg := a.theme.Subtle
+	if a.dragMode == "sidebar" {
+		fg = a.theme.Accent
+	}
+	style := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(fg)
+	for y := 0; y < a.height-1; y++ {
+		a.screen.SetContent(x, y, '│', nil, style)
 	}
 }
 
