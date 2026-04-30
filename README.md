@@ -66,6 +66,8 @@ The goals, in order:
 - **Single binary, no CGO** — cross-compiled for macOS, Linux, and
   Windows on amd64 and arm64.
 
+<img width="2504" height="1726" alt="CleanShot 2026-04-29 at 23 32 22@2x" src="https://github.com/user-attachments/assets/d0dca3da-5ba7-474d-852e-832acde90ca4" />
+
 ## Install
 
 ### macOS / Linux (Homebrew)
