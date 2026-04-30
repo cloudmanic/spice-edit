@@ -60,19 +60,25 @@ changelog:
       - "Merge pull request"
       - "Merge branch"
 
-# Homebrew tap. Requires:
-#   1. A separate empty repo at github.com/cloudmanic/homebrew-tap.
-#   2. A PAT (with `repo` scope) added to this repo as the secret named
-#      HOMEBREW_TAP_GITHUB_TOKEN.
-# When the secret isn't set the workflow runs goreleaser with
-# --skip=homebrew so releases still publish; brew updates resume the
-# next time the secret is present.
+# Homebrew formula committed straight back into this repo under Formula/.
+# Users install via:
+#
+#   brew tap cloudmanic/spice-edit https://github.com/cloudmanic/spice-edit
+#   brew install cloudmanic/spice-edit/spice-edit
+#
+# Because the formula lives in the same repo as the source, the default
+# GITHUB_TOKEN the workflow already holds is enough to push it — no PAT,
+# no separate tap repo. The [skip ci] marker on the formula-update commit
+# stops the new push from triggering a second release run.
 brews:
   - name: spice-edit
     repository:
       owner: cloudmanic
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      name: spice-edit
+      branch: main
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
+    commit_msg_template: "Update {{ .ProjectName }} brew formula to {{ .Tag }} [skip ci]"
     homepage: "https://github.com/cloudmanic/spice-edit"
     description: "SpiceEdit — opinionated mouse-first terminal code editor."
     license: "MIT"

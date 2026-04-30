@@ -13,9 +13,10 @@
 #      number, commits the change back to main with [skip ci], and pushes.
 #   2. Tags v<x.y.z> and pushes the tag.
 #   3. Runs goreleaser to cross-compile binaries (linux/darwin/windows ×
-#      amd64/arm64), package them, attach them to a GitHub Release, and —
-#      when the HOMEBREW_TAP_GITHUB_TOKEN secret is set — push an updated
-#      formula to cloudmanic/homebrew-tap.
+#      amd64/arm64), package them, attach them to a GitHub Release, and
+#      push an updated Homebrew formula into Formula/ in this same repo
+#      (using the default GITHUB_TOKEN — no separate tap repo or PAT
+#      required).
 
 name: Release
 
@@ -109,26 +110,12 @@ jobs:
           git tag -a "v$NEW" -m "Release v$NEW"
           git push origin "v$NEW"
 
-      # Decide whether goreleaser should also push to the Homebrew tap.
-      # The secret only exists once the user has created the tap repo
-      # and added a PAT — until then we still cut a release, just
-      # without the brew formula update.
-      - name: Check Homebrew secret
-        id: brew
-        env:
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-        run: |
-          if [[ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]]; then
-            echo "args=release --clean" >> "$GITHUB_OUTPUT"
-          else
-            echo "args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: ${{ steps.brew.outputs.args }}
+          args: release --clean
         env:
+          # Same-repo brew formula push uses the default workflow token —
+          # no separate tap repo or PAT needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
