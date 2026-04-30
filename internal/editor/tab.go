@@ -52,6 +52,15 @@ type Tab struct {
 	// is visible. Without this flag, mouse-wheel scrolling is fought by
 	// every redraw — EnsureVisible would snap us back to the cursor.
 	cursorMoved bool
+
+	// Undo / redo stacks plus the original on-open snapshot used by
+	// RevertFile. See undo.go for the push / coalescing rules and the
+	// public Undo / Redo / RevertFile entry points.
+	undoStack     []snapshot
+	redoStack     []snapshot
+	undoOriginal  snapshot
+	lastUndoGroup undoGroup
+	lastUndoAt    time.Time
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
@@ -73,12 +82,16 @@ func NewTab(path string) (*Tab, error) {
 			mtime = info.ModTime()
 		}
 	}
-	return &Tab{
+	t := &Tab{
 		Path:       path,
 		Buffer:     NewBuffer(string(data)),
 		StyleStale: true,
 		Mtime:      mtime,
-	}, nil
+	}
+	// Record the on-open buffer state so RevertFile has somewhere to
+	// rewind to even after the user has typed away.
+	t.initUndo()
+	return t, nil
 }
 
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
@@ -105,6 +118,10 @@ func (t *Tab) Save() error {
 	if info, err := os.Stat(t.Path); err == nil {
 		t.Mtime = info.ModTime()
 	}
+	// Save is a natural logical-step boundary: the next typing burst is
+	// clearly a separate intent, so don't let it merge into whatever was
+	// in flight before the save.
+	t.breakUndoGroup()
 	return nil
 }
 
@@ -133,6 +150,11 @@ func (t *Tab) Reload() error {
 	t.Mtime = info.ModTime()
 	t.StyleStale = true
 	t.cursorMoved = true
+	// Reload re-establishes "what's on disk" as the new baseline. Any
+	// prior undo history is meaningless now (the line indices may have
+	// shifted, and the user explicitly asked to take the disk version),
+	// so reset both stacks and the revert anchor.
+	t.initUndo()
 	return nil
 }
 
@@ -156,6 +178,11 @@ func (t *Tab) DeleteSelection() {
 	if !t.HasSelection() {
 		return
 	}
+	// Selection deletes are always their own undo step — they can wipe
+	// out a lot in one stroke, and merging them into adjacent typing
+	// would make the next undo recover content the user thought was
+	// just-deleted.
+	t.pushUndo(undoGroupStructural)
 	pos := t.Buffer.DeleteRange(t.Anchor, t.Cursor)
 	t.Cursor = pos
 	t.Anchor = pos
@@ -165,10 +192,17 @@ func (t *Tab) DeleteSelection() {
 }
 
 // InsertString inserts s at the cursor (replacing any selection first) and
-// advances the cursor past the inserted text.
+// advances the cursor past the inserted text. Always recorded as a
+// structural undo step — pasted text or "\n" presses shouldn't merge
+// with the surrounding typing burst.
 func (t *Tab) InsertString(s string) {
 	if t.HasSelection() {
+		// DeleteSelection records its own structural step. Don't push a
+		// second one here or the user would have to undo twice to get
+		// back to the pre-paste-with-selection state.
 		t.DeleteSelection()
+	} else {
+		t.pushUndo(undoGroupStructural)
 	}
 	t.Cursor = t.Buffer.InsertString(t.Cursor, s)
 	t.Anchor = t.Cursor
@@ -177,12 +211,26 @@ func (t *Tab) InsertString(s string) {
 	t.cursorMoved = true
 }
 
-// InsertRune is a convenience wrapper around InsertString for a single rune.
+// InsertRune inserts a single typed character at the cursor. Coalesces
+// with adjacent runes inside the undo window so a typed word collapses
+// into a single undo step rather than one entry per keystroke.
 func (t *Tab) InsertRune(r rune) {
-	t.InsertString(string(r))
+	if t.HasSelection() {
+		// First-rune-after-selection: let DeleteSelection capture the
+		// pre-state, then run the insert without a second push.
+		t.DeleteSelection()
+	} else {
+		t.pushUndo(undoGroupTyping)
+	}
+	t.Cursor = t.Buffer.InsertString(t.Cursor, string(r))
+	t.Anchor = t.Cursor
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
 }
 
 // Backspace deletes the character before the cursor (or the selection if any).
+// Coalesces with adjacent backspaces inside the undo window.
 func (t *Tab) Backspace() {
 	if t.HasSelection() {
 		t.DeleteSelection()
@@ -191,6 +239,7 @@ func (t *Tab) Backspace() {
 	if t.Cursor.Line == 0 && t.Cursor.Col == 0 {
 		return
 	}
+	t.pushUndo(undoGroupBackspace)
 	var prev Position
 	if t.Cursor.Col == 0 {
 		prev.Line = t.Cursor.Line - 1
@@ -206,6 +255,7 @@ func (t *Tab) Backspace() {
 }
 
 // Delete removes the character after the cursor (or the selection if any).
+// Coalesces with adjacent forward-deletes inside the undo window.
 func (t *Tab) Delete() {
 	if t.HasSelection() {
 		t.DeleteSelection()
@@ -215,6 +265,7 @@ func (t *Tab) Delete() {
 	if t.Cursor == end {
 		return
 	}
+	t.pushUndo(undoGroupDelete)
 	var next Position
 	line := []rune(t.Buffer.Lines[t.Cursor.Line])
 	if t.Cursor.Col >= len(line) {
@@ -273,6 +324,9 @@ func (t *Tab) MoveCursor(dLine, dCol int, extend bool) {
 		t.Anchor = cur
 	}
 	t.cursorMoved = true
+	// Cursor moved on the user's explicit command — close any open
+	// coalescing window so the next typing burst is a fresh undo step.
+	t.breakUndoGroup()
 }
 
 // MoveCursorTo sets the cursor to a specific buffer position. Position is
@@ -284,6 +338,7 @@ func (t *Tab) MoveCursorTo(p Position, extend bool) {
 		t.Anchor = p
 	}
 	t.cursorMoved = true
+	t.breakUndoGroup()
 }
 
 // MoveLineHome moves the cursor to column 0 of the current line.
@@ -293,6 +348,7 @@ func (t *Tab) MoveLineHome(extend bool) {
 		t.Anchor = t.Cursor
 	}
 	t.cursorMoved = true
+	t.breakUndoGroup()
 }
 
 // MoveLineEnd moves the cursor to the last column of the current line.
@@ -302,6 +358,7 @@ func (t *Tab) MoveLineEnd(extend bool) {
 		t.Anchor = t.Cursor
 	}
 	t.cursorMoved = true
+	t.breakUndoGroup()
 }
 
 // SelectAll selects the entire buffer (anchor at start, cursor at end).
@@ -309,6 +366,7 @@ func (t *Tab) SelectAll() {
 	t.Anchor = Position{Line: 0, Col: 0}
 	t.Cursor = t.Buffer.EndPos()
 	t.cursorMoved = true
+	t.breakUndoGroup()
 }
 
 // EnsureVisible scrolls the viewport so the cursor is on screen. The
