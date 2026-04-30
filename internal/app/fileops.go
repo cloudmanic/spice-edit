@@ -79,19 +79,27 @@ func deleteFile(path string) error {
 // App glue: wrap the backend ops in tab/tree-aware helpers.
 // -----------------------------------------------------------------------------
 
-// doCreateFile creates an empty file inside parent named name, refreshes the
-// tree, and opens the new file in a tab. Errors are surfaced as a flash.
+// doCreateFile creates an empty file inside parent at the relative path
+// name, refreshes the tree, and opens the new file in a tab. Errors are
+// surfaced as a flash. name may contain path separators so the user can
+// drop a file into a subdirectory ("subdir/foo.go") — but the parent
+// directories must already exist; we don't silently mkdir to avoid
+// creating folders the user didn't realise they were making.
 func (a *App) doCreateFile(parent, name string) {
 	name = trimSpace(name)
 	if name == "" {
 		return
 	}
-	if strings.ContainsAny(name, string(os.PathSeparator)+"/\\") {
-		a.flash("File name can't contain a path separator")
-		return
-	}
 	target := filepath.Join(parent, name)
 	if err := createEmptyFile(target); err != nil {
+		// Translate the noisy "open <path>: no such file or directory"
+		// case into something the user can actually act on. ENOENT here
+		// means the parent directory doesn't exist.
+		if os.IsNotExist(err) {
+			a.flash(fmt.Sprintf("Create failed: %s doesn't exist — create it first",
+				filepath.Dir(target)))
+			return
+		}
 		a.flash(fmt.Sprintf("Create failed: %v", err))
 		return
 	}
@@ -152,6 +160,79 @@ func (a *App) doDeleteFile(path string) {
 // -----------------------------------------------------------------------------
 // Main menu actions: rename / delete the file backing the active tab.
 // -----------------------------------------------------------------------------
+
+// menuNewFile prompts the user for a filename and creates an empty file in
+// the editor's active folder. The active folder is shown in the prompt's
+// hint line so the user can see exactly where the file is going. Path
+// separators are allowed in the input — typing "subdir/foo.go" lands the
+// new file in subdir, relative to the active folder.
+//
+// If the active folder has been deleted on disk while the editor was open
+// we silently fall back to the project root rather than handing the user
+// a prompt rooted at a path that no longer exists.
+func (a *App) menuNewFile() {
+	a.closeMenu()
+	folder := a.activeFolder
+	if folder == "" {
+		folder = a.rootDir
+	}
+	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+		folder = a.rootDir
+		a.setActiveFolder(folder)
+	}
+	hint := "in " + a.relativeFolderLabel(folder)
+	a.openPrompt(
+		"New file",
+		hint,
+		"",
+		func(app *App, value string) {
+			app.doCreateFile(folder, value)
+		},
+	)
+}
+
+// newFileLabel is the dynamic label hook for the New File menu row. It
+// shows the bare label when the active folder is the project root and a
+// "(in subfolder)" suffix otherwise, so the user can tell at a glance
+// where the file will land before they even click.
+func (a *App) newFileLabel() string {
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return "New file"
+	}
+	rel := a.relativeFolderLabel(folder)
+	// Truncate so the row never overflows the modal width. The modal is
+	// 38 cells wide; "▸" + label + padding leaves ~30 cells for text.
+	const maxLen = 28
+	suffix := " (in " + rel + ")"
+	if runeLen(suffix) > maxLen {
+		// Drop characters from the middle of rel so the trailing folder
+		// name (the most informative part) stays visible.
+		keep := maxLen - len(" (in …)")
+		if keep < 4 {
+			keep = 4
+		}
+		if keep < len(rel) {
+			rel = "…" + rel[len(rel)-keep:]
+		}
+		suffix = " (in " + rel + ")"
+	}
+	return "New file" + suffix
+}
+
+// relativeFolderLabel returns folder rendered relative to the project root,
+// or just the basename when folder is the root itself. Used in the New
+// File prompt's hint and the menu row's dynamic label.
+func (a *App) relativeFolderLabel(folder string) string {
+	if folder == a.rootDir {
+		return filepath.Base(a.rootDir) + string(filepath.Separator)
+	}
+	rel, err := filepath.Rel(a.rootDir, folder)
+	if err != nil || rel == "." {
+		return filepath.Base(folder) + string(filepath.Separator)
+	}
+	return rel + string(filepath.Separator)
+}
 
 // menuRename opens a prompt pre-filled with the active tab's basename and
 // renames the file on submit. Untitled tabs are skipped — the menu row is
