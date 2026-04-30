@@ -124,7 +124,11 @@ Then:
 - Click a file in the tree to open it.
 - Click a tab to switch, click the `×` to close it.
 - Click `≡` (top-left), right-click anywhere, or double-tap `Esc`
-  for the action menu (Save, Save & Close, Show/Hide Sidebar, Quit, …).
+  for the action menu — including New file, Rename, Delete.
+- If your terminal forwards Button3, right-click on a file or folder
+  in the tree opens a per-item context menu (New File on folders,
+  Rename, Delete). macOS Terminal + tmux often swallows right-click,
+  so all of those actions also live in the main `≡` menu.
 - Drag the splitter between the sidebar and editor to resize.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.

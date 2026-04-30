@@ -41,6 +41,13 @@ type Tree struct {
 	Root    *Node
 	visible []*Node // index = screen row in the list area; nil for blank rows.
 	ScrollY int
+
+	// ActiveFolder is the absolute path of the folder the user is
+	// currently "working in" — the default target for actions like New
+	// File. The Render() method bolds the matching row so the choice is
+	// always visible. The app updates this whenever the user clicks a
+	// tree node or opens a file.
+	ActiveFolder string
 }
 
 // New creates a tree rooted at root and pre-loads its top-level children so
@@ -214,14 +221,18 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			continue
 		}
 		item := flat[idx]
-		drawNodeRow(scr, th, x, listTop+row, w, item)
+		active := item.Node.IsDir && item.Node.Path == t.ActiveFolder
+		drawNodeRow(scr, th, x, listTop+row, w, item, active)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
 }
 
 // drawNodeRow renders one tree row with proper indent, chevron, and color.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode) {
+// active=true marks this folder as the editor's current working folder
+// (the New File default), and is drawn bold + accent-tinted so the user
+// can see at a glance where the next "New file" will land.
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 	var line string
@@ -233,11 +244,17 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode) {
 		}
 		line = " " + indent + chev + " " + item.Node.Name + "/"
 		fg = th.FolderColor
+		if active {
+			fg = th.Accent
+		}
 	} else {
 		line = " " + indent + "  " + item.Node.Name
 		fg = th.FileColor
 	}
 	style := tcell.StyleDefault.Background(bg).Foreground(fg)
+	if active {
+		style = style.Bold(true)
+	}
 	drawString(scr, x, y, w, line, style)
 }
 

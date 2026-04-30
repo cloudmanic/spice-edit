@@ -40,7 +40,7 @@ const (
 	minSidebarWidth     = 18
 	minEditorAfterDrag  = 40
 	minWidth            = 50
-	minHeight           = 17
+	minHeight           = 20
 	statusFlashFor = 3 * time.Second
 	doubleClickMs  = 500 * time.Millisecond
 	doubleEscMs    = 500 * time.Millisecond
@@ -61,7 +61,7 @@ const (
 	// ("Save & close tab") plus chevron and padding; height is fixed by
 	// the layout below.
 	modalWidth  = 38
-	modalHeight = 15
+	modalHeight = 19
 
 	// autoScrollTick is how often the auto-scroll goroutine emits a tick
 	// while the user is drag-selecting with the cursor parked outside the
@@ -124,20 +124,31 @@ type menuItemDef struct {
 // menuItems is the full list of menu actions, in display order. Their relY
 // fields are absolute row offsets inside the modal — see drawMenu for the
 // surrounding box drawing.
+//
+// Layout (mirrored by the divider list in drawMenu):
+//
+//	  3,4,5     Tab actions    — Save, Save & close, Close
+//	  7,8,9     File actions   — New, Rename, Delete (current/active folder)
+//	  11,12,13  Clipboard      — Copy, Cut, Paste
+//	  15        View toggle    — Show / Hide file explorer
+//	  17        Quit
 var menuItems = []menuItemDef{
 	{label: "Save", relY: 3, action: (*App).menuSave, enabled: (*App).hasSavableTab},
 	{label: "Save & close tab", relY: 4, action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
 	{label: "Close tab", relY: 5, action: (*App).menuClose, enabled: (*App).hasTab},
-	{label: "Copy selection", relY: 7, action: (*App).menuCopy, enabled: (*App).hasSelection},
-	{label: "Cut selection", relY: 8, action: (*App).menuCut, enabled: (*App).hasSelection},
-	{label: "Paste", relY: 9, action: (*App).menuPaste, enabled: (*App).hasClipboard},
-	{relY: 11, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
+	{relY: 7, action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+	{label: "Rename file", relY: 8, action: (*App).menuRename, enabled: (*App).hasSavableTab},
+	{label: "Delete file", relY: 9, action: (*App).menuDelete, enabled: (*App).hasSavableTab},
+	{label: "Copy selection", relY: 11, action: (*App).menuCopy, enabled: (*App).hasSelection},
+	{label: "Cut selection", relY: 12, action: (*App).menuCut, enabled: (*App).hasSelection},
+	{label: "Paste", relY: 13, action: (*App).menuPaste, enabled: (*App).hasClipboard},
+	{relY: 15, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
 	// Manual tree refresh — disabled in favour of the 10s background poller,
 	// but menuRefreshTree below stays so we can re-add the row later by
 	// picking a free relY (and adjusting modalHeight + dividers if you
 	// want it in its own group).
 	// {label: "Refresh tree", relY: ?, action: (*App).menuRefreshTree, enabled: alwaysTrue},
-	{label: "Quit editor", relY: 13, action: (*App).menuQuit, enabled: alwaysTrue},
+	{label: "Quit editor", relY: 17, action: (*App).menuQuit, enabled: alwaysTrue},
 }
 
 // alwaysTrue is the default predicate for actions that are always applicable
@@ -153,6 +164,14 @@ type App struct {
 	tree      *filetree.Tree
 	tabs      []*editor.Tab
 	activeTab int
+
+	// activeFolder is the directory the editor is currently "working
+	// in" — the default target for New File from the main menu. It
+	// updates whenever the user clicks a folder in the tree, opens a
+	// file (parent dir wins), or right-clicks a folder. See
+	// setActiveFolder for the single write path so the file tree's
+	// matching highlight stays in sync.
+	activeFolder string
 
 	width, height int
 
@@ -176,6 +195,32 @@ type App struct {
 	menuOpen        bool
 	hoveredMenuRow  int       // index into menuItems of the row under the mouse, or -1.
 	lastEscape      time.Time // timestamp of the previous Esc press, for double-tap detection.
+
+	// Prompt modal — single-line text input with OK / Cancel. Used by
+	// Rename and New File. See modals.go for render + event handling.
+	promptOpen     bool
+	promptTitle    string
+	promptHint     string
+	promptValue    []rune
+	promptCursor   int
+	promptScroll   int
+	promptCallback func(*App, string)
+
+	// Confirm modal — Yes / No, used by Delete. confirmHover is 0 for No
+	// (the safe default) or 1 for Yes.
+	confirmOpen     bool
+	confirmTitle    string
+	confirmMessage  string
+	confirmHover    int
+	confirmCallback func(*App)
+
+	// Right-click context menu over the file tree.
+	contextOpen  bool
+	contextX     int
+	contextY     int
+	contextNode  *filetree.Node
+	contextItems []contextItem
+	contextHover int
 
 	// Auto-scroll while drag-selecting past the editor's top/bottom edge.
 	// lastDragX/Y is the most recent mouse position so the auto-scroll
@@ -224,6 +269,7 @@ func New(rootDir string) (*App, error) {
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
 	}
+	a.setActiveFolder(tree.Root.Path)
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
 	return a, nil
@@ -470,6 +516,23 @@ func (a *App) menuModalRect() (x, y, w, h int) {
 // fights the terminal (Ctrl-S/Q flow control) or a tmux/zellij prefix. The
 // only "command" key is Esc, which closes the menu.
 func (a *App) handleKey(ev *tcell.EventKey) {
+	// Secondary modals own the keyboard while they're up. Each handler
+	// understands Esc (cancel), Enter (submit / activate), and the keys
+	// relevant to its layout (text editing for the prompt, arrow keys for
+	// the context menu, etc.).
+	if a.promptOpen {
+		a.handlePromptKey(ev)
+		return
+	}
+	if a.confirmOpen {
+		a.handleConfirmKey(ev)
+		return
+	}
+	if a.contextOpen {
+		a.handleContextKey(ev)
+		return
+	}
+
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
 		//   • menu open  → close it
@@ -559,15 +622,36 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	x, y := ev.Position()
 	btn := ev.Buttons()
 
+	// Secondary modals absorb all mouse input. The order here matches
+	// keyboard routing so behavior stays predictable.
+	if a.promptOpen {
+		a.handlePromptMouse(x, y, btn)
+		return
+	}
+	if a.confirmOpen {
+		a.handleConfirmMouse(x, y, btn)
+		return
+	}
+	if a.contextOpen {
+		a.handleContextMouse(x, y, btn)
+		return
+	}
+
 	if a.menuOpen {
 		a.updateMenuHover(x, y)
 		a.handleMenuMouse(x, y, btn)
 		return
 	}
 
-	// Right-click anywhere opens the menu — a redundant, mouse-only path
-	// to actions for users who'd rather not hunt for the icon.
+	// Right-click handling. Over a file-tree row it opens a small context
+	// menu with file-management actions for that node; everywhere else
+	// it falls through to the main action menu so users have a redundant
+	// mouse-only path to it. Note: macOS Terminal + tmux often swallows
+	// Button3, which is why every action also lives in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
+		if a.tryTreeContextClick(x, y) {
+			return
+		}
 		a.openMenu()
 		return
 	}
@@ -659,8 +743,39 @@ func (a *App) scrollAt(x, y, delta int) {
 	}
 }
 
+// tryTreeContextClick opens the right-click context menu when (x, y) lands
+// on a tree row. Returns true if it consumed the event so the caller knows
+// not to fall back to the main action menu. Right-clicking a node also
+// counts as "I'm working here" — the active folder updates so the main
+// menu's New File defaults to a sensible target even after the context
+// menu closes.
+func (a *App) tryTreeContextClick(x, y int) bool {
+	sw := a.sidebarW()
+	if sw <= 0 {
+		return false
+	}
+	splitX := a.splitterX()
+	if x >= splitX {
+		return false
+	}
+	sx, sy, _, _ := a.sidebarRect()
+	n, ok := a.tree.HitTest(x-sx, y-sy)
+	if !ok {
+		return false
+	}
+	if n.IsDir {
+		a.setActiveFolder(n.Path)
+	} else {
+		a.setActiveFolder(filepath.Dir(n.Path))
+	}
+	a.openTreeContext(n, x, y)
+	return true
+}
+
 // sidebarClick toggles a directory or opens a file when the user clicks a
-// row in the file tree.
+// row in the file tree. Either action also updates the editor's "active
+// folder" so the next New File from the main menu defaults to wherever
+// the user is currently focused.
 func (a *App) sidebarClick(x, y int) {
 	sx, sy, _, _ := a.sidebarRect()
 	n, ok := a.tree.HitTest(x-sx, y-sy)
@@ -668,10 +783,22 @@ func (a *App) sidebarClick(x, y int) {
 		return
 	}
 	if n.IsDir {
+		a.setActiveFolder(n.Path)
 		a.tree.Toggle(n)
 		return
 	}
+	a.setActiveFolder(filepath.Dir(n.Path))
 	a.openFile(n.Path)
+}
+
+// setActiveFolder records path as the editor's current working folder and
+// mirrors it onto the file tree so the matching row renders with the
+// "active" highlight. All writes to a.activeFolder go through here.
+func (a *App) setActiveFolder(path string) {
+	a.activeFolder = path
+	if a.tree != nil {
+		a.tree.ActiveFolder = path
+	}
 }
 
 // tabBarClick dispatches clicks in the tab bar: the leftmost menuButtonWidth
@@ -812,7 +939,7 @@ func (a *App) stopAutoScroll() {
 // suggests the user is no longer drag-selecting (button released, menu
 // opened, no active tab).
 func (a *App) handleAutoScroll() {
-	if a.autoScrollDir == 0 || a.dragMode != "editor" || a.menuOpen {
+	if a.autoScrollDir == 0 || a.dragMode != "editor" || a.anyModalOpen() {
 		a.stopAutoScroll()
 		return
 	}
@@ -898,7 +1025,10 @@ func (a *App) flash(msg string) {
 
 // openFile opens the file at path in a new tab — or switches to it if it is
 // already open in another tab. Errors are surfaced as a flash message.
+// Whatever the path resolves to, its parent becomes the active folder so
+// the next New File from the main menu lands next to it.
 func (a *App) openFile(path string) {
+	a.setActiveFolder(filepath.Dir(path))
 	for i, t := range a.tabs {
 		if t.Path == path {
 			a.activeTab = i
@@ -1012,10 +1142,8 @@ func (a *App) pasteClipboard() {
 // select the first enabled row so Down/Up/Enter keyboard navigation has
 // somewhere sensible to start.
 func (a *App) openMenu() {
+	a.closeAllModals()
 	a.menuOpen = true
-	a.dragMode = ""
-	a.stopAutoScroll()
-	a.hoveredMenuRow = -1
 	a.menuMoveSelection(1)
 }
 
@@ -1217,8 +1345,20 @@ func (a *App) draw() {
 
 	a.drawStatusBar()
 
+	// Modal layering, bottom-up. Only one of these is open at a time
+	// (closeAllModals enforces it), but the order still matters so a
+	// future contributor can't accidentally double-open them.
 	if a.menuOpen {
 		a.drawMenu()
+	}
+	if a.contextOpen {
+		a.drawContext()
+	}
+	if a.promptOpen {
+		a.drawPrompt()
+	}
+	if a.confirmOpen {
+		a.drawConfirm()
 	}
 }
 
@@ -1450,8 +1590,9 @@ func (a *App) drawMenu() {
 		a.screen.SetContent(mx+mw-1, cy, '│', nil, borderStyle)
 	}
 
-	// Horizontal dividers between action groups.
-	for _, dy := range []int{2, 6, 10, 12} {
+	// Horizontal dividers between action groups. See menuItems above for
+	// the matching row layout.
+	for _, dy := range []int{2, 6, 10, 14, 16} {
 		cy := my + dy
 		a.screen.SetContent(mx, cy, '├', nil, borderStyle)
 		a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)

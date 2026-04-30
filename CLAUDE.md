@@ -23,6 +23,12 @@ the `≡` icon, right-clicking, or double-tapping `Esc`. There are
 intentionally **no `Ctrl+` shortcuts** for editor actions — they conflict
 with `tmux` and terminal emulators. Don't add them back.
 
+**Every file action also lives in the main ≡ menu.** macOS Terminal +
+tmux often swallows Button3 (right-click), so the editor cannot rely on
+right-click as the only path to anything. Tree right-click is a redundant
+shortcut, not a primary surface — when adding new file-management
+features, make sure they're reachable from the main menu first.
+
 ## Module / repo
 
 - Module: `github.com/cloudmanic/spice-edit`
