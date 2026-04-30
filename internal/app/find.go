@@ -27,14 +27,10 @@ import (
 // every call site.
 const findBarHeight = 1
 
-// openFind shows the find bar and seeds the input with the active tab's
-// last query (so tapping Esc-f a second time reopens the bar with the
-// search the user was running). The cursor lands at the end of the
-// pre-fill so the user can keep typing or just press Enter.
-//
-// We don't compute matches here — the user will type something, and the
-// per-keystroke handler will recompute the match list. Pre-filling with
-// a stale query is also a no-op visually until the user presses Enter.
+// openFind shows the find bar with an empty input. We don't pre-fill
+// the user's last query because closing the bar already clears find
+// state — Esc means "I'm done searching." Each Esc-f opens a fresh
+// search.
 func (a *App) openFind() {
 	tab := a.activeTabPtr()
 	if tab == nil || tab.IsImage() {
@@ -42,25 +38,24 @@ func (a *App) openFind() {
 	}
 	a.closeAllModals() // a modal would otherwise eat our keystrokes
 	a.findOpen = true
-	a.findValue = []rune(tab.FindQuery)
-	a.findCursor = len(a.findValue)
+	a.findValue = nil
+	a.findCursor = 0
 	a.findScroll = 0
-	// Re-apply the (possibly empty) query so the highlight bar matches
-	// what's in the input field. SetFindQuery handles the empty case
-	// itself, so this works regardless of whether the user had a prior
-	// search.
-	tab.SetFindQuery(string(a.findValue))
 }
 
-// closeFind hides the find bar but preserves the tab's query / matches
-// so that Esc g (find again) and re-opening with Esc f both pick up
-// where the user left off. ClearFind would wipe that state — we don't
-// want to.
+// closeFind hides the find bar AND clears the active tab's find state
+// so the highlights disappear with the bar. Leaving them painted after
+// close is surprising — users expect Esc to mean "I'm done searching."
+// Esc-g after a closed bar simply re-opens the bar so the user can type
+// a fresh query.
 func (a *App) closeFind() {
 	a.findOpen = false
 	a.findValue = nil
 	a.findCursor = 0
 	a.findScroll = 0
+	if tab := a.activeTabPtr(); tab != nil {
+		tab.ClearFind()
+	}
 }
 
 // findApplyQuery pushes the current input text into the active tab's
@@ -96,22 +91,6 @@ func (a *App) findPrev() {
 func (a *App) menuFind() {
 	a.closeMenu()
 	a.openFind()
-}
-
-// findAgain is the Esc-g leader entry point. If the active tab has a
-// prior query, jump to its next match without re-opening the bar; if it
-// has no prior query, fall back to opening the bar so the user has
-// somewhere to type.
-func (a *App) findAgain() {
-	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
-		return
-	}
-	if tab.FindQuery == "" {
-		a.openFind()
-		return
-	}
-	tab.FindNext()
 }
 
 // hasFindable reports whether the active tab is a text tab — used to

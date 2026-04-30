@@ -151,7 +151,6 @@ within half a second tap one of the letters below.
 | `Esc n`     | New file        |
 | `Esc t`     | Toggle sidebar  |
 | `Esc f`     | Find in file    |
-| `Esc g`     | Find again (next match for the last query) |
 
 A lone `Esc` is harmless — if you don't follow it with a bound letter
 within the window, your next keystroke goes to the editor as normal,
@@ -173,14 +172,13 @@ above the status bar:
   highlight live as you type.
 - `Enter` jumps to the next match (wraps at the end), `Shift+Enter`
   jumps to the previous one.
-- `Esc` closes the bar but **remembers the query** — `Esc g` from
-  anywhere will jump to the next match without re-typing.
+- `Esc` closes the bar and clears the highlights — each `Esc f` opens
+  a fresh search.
 - The active match is painted a brighter color than the rest, so you
   can pick out where you are in the result set.
 
 There's no regex, whole-word, or case-sensitive toggle in v1 — the
 common case is "I know roughly what I'm looking for, take me there."
-Switch tabs and the find state travels with each tab independently.
 
 ## Custom actions (open remote files on your laptop)
 

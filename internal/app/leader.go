@@ -45,7 +45,6 @@ func leaderBindings() []leaderBinding {
 		{'n', (*App).menuNewFile},
 		{'t', (*App).menuToggleSidebar},
 		{'f', (*App).openFind},
-		{'g', (*App).findAgain},
 	}
 }
 

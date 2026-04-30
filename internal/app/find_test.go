@@ -31,19 +31,18 @@ func seedFindApp(t *testing.T, content string) *App {
 	return a
 }
 
-// TestOpenFind_OpensBarAndSeedsInput proves Esc-f / openFind drops the
-// user into a focused find bar with the active tab's prior query
-// pre-filled, so a second open round-trips the user back to where they
-// left off.
-func TestOpenFind_OpensBarAndSeedsInput(t *testing.T) {
+// TestOpenFind_OpensBarEmpty drops the user into a focused find bar
+// with an empty input. Pre-fill from a prior query is intentionally
+// not done — closing the bar already clears find state, so each Esc-f
+// is a fresh search.
+func TestOpenFind_OpensBarEmpty(t *testing.T) {
 	a := seedFindApp(t, "foo bar foo")
-	a.activeTabPtr().SetFindQuery("foo") // simulate prior search
 	a.openFind()
 	if !a.findOpen {
 		t.Fatal("openFind did not flip findOpen")
 	}
-	if string(a.findValue) != "foo" {
-		t.Fatalf("expected pre-fill 'foo', got %q", string(a.findValue))
+	if len(a.findValue) != 0 {
+		t.Fatalf("input should be empty, got %q", string(a.findValue))
 	}
 }
 
@@ -111,10 +110,11 @@ func TestHandleFindKey_ShiftEnterGoesBack(t *testing.T) {
 	}
 }
 
-// TestHandleFindKey_EscClosesBar pins the close gesture: Esc drops the
-// bar but leaves the tab's query / match list intact so Esc-g can still
-// repeat the search.
-func TestHandleFindKey_EscClosesBar(t *testing.T) {
+// TestHandleFindKey_EscClearsHighlights pins the close gesture: Esc
+// closes the bar AND wipes the tab's match list so the highlights
+// disappear with the UI. Leaving them painted after the bar closes is
+// the kind of "did anything happen?" surprise we want to avoid.
+func TestHandleFindKey_EscClearsHighlights(t *testing.T) {
 	a := seedFindApp(t, "foo bar foo")
 	a.openFind()
 	for _, r := range "foo" {
@@ -124,8 +124,9 @@ func TestHandleFindKey_EscClosesBar(t *testing.T) {
 	if a.findOpen {
 		t.Fatal("Esc should close the find bar")
 	}
-	if a.activeTabPtr().FindQuery != "foo" {
-		t.Fatalf("tab.FindQuery should survive close, got %q", a.activeTabPtr().FindQuery)
+	tab := a.activeTabPtr()
+	if tab.FindQuery != "" || tab.FindMatches != nil || tab.FindIndex != -1 {
+		t.Fatalf("Esc should clear all find state, got %+v", tab)
 	}
 }
 
@@ -145,32 +146,6 @@ func TestHandleFindKey_BackspaceLiveUpdates(t *testing.T) {
 	a.handleFindKey(keyEv(tcell.KeyBackspace, 0))
 	if len(tab.FindMatches) != 2 {
 		t.Fatalf("after backspace should match 'foo' (2x), got %d", len(tab.FindMatches))
-	}
-}
-
-// TestFindAgain_ReopensWhenNoQuery is the friendly path for Esc-g: if
-// the user hasn't searched yet, "again" turns into "open the bar" so
-// they get somewhere to type instead of a silent no-op.
-func TestFindAgain_ReopensWhenNoQuery(t *testing.T) {
-	a := seedFindApp(t, "foo bar")
-	a.findAgain()
-	if !a.findOpen {
-		t.Fatal("findAgain with no prior query should open the bar")
-	}
-}
-
-// TestFindAgain_AdvancesWhenClosed exercises the repeat-find flow: with
-// a prior query stored on the tab, Esc-g should jump to the next match
-// without re-opening the bar.
-func TestFindAgain_AdvancesWhenClosed(t *testing.T) {
-	a := seedFindApp(t, "foo\nfoo\nfoo")
-	a.activeTabPtr().SetFindQuery("foo") // pretend we'd searched
-	a.findAgain()
-	if a.findOpen {
-		t.Fatal("findAgain with prior query should not reopen the bar")
-	}
-	if a.activeTabPtr().FindIndex != 1 {
-		t.Fatalf("expected to advance to FindIndex=1, got %d", a.activeTabPtr().FindIndex)
 	}
 }
 
