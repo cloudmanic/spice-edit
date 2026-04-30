@@ -7,3 +7,7 @@
 # Vim swap files.
 *.swp
 *.swo
+
+# Test coverage artifacts.
+/coverage.out
+/coverage.html
