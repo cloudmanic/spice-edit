@@ -1,0 +1,85 @@
+# =============================================================================
+# File: .goreleaser.yml
+# Author: Spicer Matthews <spicer@cloudmanic.com>
+# Created: 2026-04-29
+# Copyright: 2026 Cloudmanic, LLC. All rights reserved.
+# =============================================================================
+#
+# GoReleaser config for SpiceEdit. Driven by .github/workflows/release.yml on
+# every push to main: that workflow bumps internal/version/version.go and
+# tags v<x.y.z>, then invokes `goreleaser release --clean`. Goreleaser then
+# cross-compiles the binary, archives it, attaches it to a GitHub Release,
+# and (when the homebrew tap secret is set) updates the Homebrew formula.
+
+version: 2
+
+project_name: spiceedit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: spiceedit
+    binary: spiceedit
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    # Skip windows/arm64 — less common, and we'd rather not ship binaries
+    # we can't easily test. Add it back if there's demand.
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "Merge pull request"
+      - "Merge branch"
+
+# Homebrew tap. Requires:
+#   1. A separate empty repo at github.com/cloudmanic/homebrew-tap.
+#   2. A PAT (with `repo` scope) added to this repo as the secret named
+#      HOMEBREW_TAP_GITHUB_TOKEN.
+# When the secret isn't set the workflow runs goreleaser with
+# --skip=homebrew so releases still publish; brew updates resume the
+# next time the secret is present.
+brews:
+  - name: spice-edit
+    repository:
+      owner: cloudmanic
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/cloudmanic/spice-edit"
+    description: "SpiceEdit — opinionated mouse-first terminal code editor."
+    license: "MIT"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    install: |
+      bin.install "spiceedit"
+    test: |
+      assert_path_exists bin/"spiceedit"
