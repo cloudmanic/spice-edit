@@ -63,9 +63,40 @@ copyright year matching the **current year** (2026 right now).
 - Skip throwaway "what" comments inside functions; favor "why" notes
   for non-obvious decisions.
 
-### Tests
-One `_test.go` file per source file, alongside it. Don't split tests
-across multiple files for a single source file.
+### Tests — required, not optional
+**Every source file gets a corresponding `_test.go` file in the same
+package.** New code without tests should not be merged. The bar:
+
+- New exported functions: cover happy path + the obvious failure mode.
+- New unexported helpers with non-trivial logic: same.
+- Bug fixes: add a test that fails before the fix and passes after.
+- Pure data / glue (theme palettes, single-constant files): a smoke
+  test that the value is sensible is enough.
+
+Conventions:
+- One `_test.go` per source file, in the same package (NOT `_test`),
+  so tests can poke unexported helpers directly. Don't split tests
+  for one source file across multiple test files.
+- Each `Test*` function gets a short doc comment above it explaining
+  the behavior it pins down — the same "why over what" rule as
+  production code. See `internal/app/fileops_test.go` for the style.
+- Use `t.TempDir()` for filesystem state; never write into the repo
+  or `/tmp` directly.
+- For UI / drawing code that takes a `tcell.Screen`, build one with
+  `tcell.NewSimulationScreen("UTF-8")` and assert against
+  `scr.GetContents()`.
+- Skip a test (`t.Skip`) only when the environment can't satisfy a
+  hard requirement (e.g. `/dev/tty` in CI). Don't skip to dodge a
+  flaky test — fix it.
+
+Run them locally:
+```sh
+make test          # go test ./... with race detector
+make coverage      # generates coverage.out + an HTML report
+```
+
+CI (`.github/workflows/test.yml`) runs `go test ./...` on every push
+and every PR; broken tests block merges via the PR's required-checks.
 
 ### Commits
 - No "Generated with Claude Code" trailers, no Co-Authored-By Claude.

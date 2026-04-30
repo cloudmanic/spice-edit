@@ -157,9 +157,16 @@ Then:
 make run          # build and run against the current directory
 make build        # build to ./bin/spiceedit
 make build-linux  # cross-compile a linux/amd64 binary
+make test         # full suite with -race (same as CI)
+make test-short   # quick iteration loop (-short, no race)
+make coverage     # writes coverage.out + a browsable coverage.html
 make tidy         # go mod tidy
-make clean        # rm -rf bin
+make clean        # rm -rf bin + coverage artifacts
 ```
+
+Every push and PR runs `go test ./...` on Linux + macOS via
+[`.github/workflows/test.yml`](.github/workflows/test.yml). New code
+needs a corresponding `_test.go` — see CLAUDE.md for the bar.
 
 ## Releases
 
