@@ -19,6 +19,8 @@ into a remote box from inside `tmux` / `zellij`, opening a project, clicking
 around files like a normal human, copying and pasting through your local
 clipboard, and getting back to work.
 
+<img width="2510" height="1712" alt="CleanShot 2026-04-29 at 23 30 21@2x" src="https://github.com/user-attachments/assets/a42ff082-406c-48cf-b5ca-9ca978ada217" />
+
 ## Why does this exist?
 
 Vim and friends are wonderful if you've spent years memorizing them. Most
