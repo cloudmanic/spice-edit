@@ -14,7 +14,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/cloudmanic/spiceedit/internal/theme"
+	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
 // Highlight tokenises src using a Chroma lexer chosen by filename (falling

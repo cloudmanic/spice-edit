@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cloudmanic/spiceedit/internal/app"
+	"github.com/cloudmanic/spice-edit/internal/app"
 )
 
 // main parses an optional root-directory argument and starts the editor.

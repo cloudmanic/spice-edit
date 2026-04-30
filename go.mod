@@ -1,4 +1,4 @@
-module github.com/cloudmanic/spiceedit
+module github.com/cloudmanic/spice-edit
 
 go 1.24.0
 

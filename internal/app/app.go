@@ -26,11 +26,11 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/cloudmanic/spiceedit/internal/clipboard"
-	"github.com/cloudmanic/spiceedit/internal/editor"
-	"github.com/cloudmanic/spiceedit/internal/filetree"
-	"github.com/cloudmanic/spiceedit/internal/theme"
-	"github.com/cloudmanic/spiceedit/internal/version"
+	"github.com/cloudmanic/spice-edit/internal/clipboard"
+	"github.com/cloudmanic/spice-edit/internal/editor"
+	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/theme"
+	"github.com/cloudmanic/spice-edit/internal/version"
 )
 
 // Layout, behavior, and feel constants. Constants instead of config —

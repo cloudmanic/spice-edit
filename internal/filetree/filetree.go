@@ -20,7 +20,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/cloudmanic/spiceedit/internal/theme"
+	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
 // Node is a single entry in the file tree. Directories also carry their
