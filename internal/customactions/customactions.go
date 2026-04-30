@@ -48,6 +48,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Action is one row that will appear in the menu modal. Label is the
@@ -127,4 +128,95 @@ func Load(path string) ([]Action, error) {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// LogPath returns the canonical log location:
+// $XDG_STATE_HOME/spiceedit/actions.log, falling back to
+// ~/.local/state/spiceedit/actions.log when XDG_STATE_HOME isn't set.
+// Returns "" when neither resolves to anything usable — callers
+// should treat that as "no logging" and quietly skip.
+//
+// We use the XDG state directory, *not* config, because the file is
+// generated and rewritten by the app — config is for hand-edited
+// rules, state is for things the app produces (logs, caches, history).
+func LogPath() string {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "spiceedit", "actions.log")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".local", "state", "spiceedit", "actions.log")
+}
+
+// RunRecord captures everything we want to log about one custom-action
+// invocation. Time is the moment the command was launched; Duration
+// is wall-clock from launch to exit. Output is the combined stdout +
+// stderr the command produced (truncated by the caller if huge).
+// ExitErr is nil when the command succeeded.
+type RunRecord struct {
+	Time     time.Time
+	Duration time.Duration
+	Label    string
+	Command  string
+	File     string
+	Filename string
+	ExitErr  error
+	Output   []byte
+}
+
+// AppendLog appends a human-readable record of one run to logPath.
+// Creates the parent directory on demand. Best-effort: any IO failure
+// is returned for the caller's diagnostics, but the editor never
+// blocks on or aborts because of a log write — runCustomAction
+// ignores the return value on purpose.
+//
+// Format is intentionally line-oriented and grep-friendly:
+//
+//	[2026-04-30T13:26:32-07:00] Open on Rager (1.234s) → ok
+//	  command: scp "$FILE" rager:~/Downloads/ ...
+//	  FILE:     /abs/path/to/file
+//	  FILENAME: file
+//	  --- output ---
+//	  <combined stdout + stderr, with trailing newline>
+//	  --- end ---
+//
+// A blank line separates entries so two consecutive runs read clearly.
+func AppendLog(logPath string, r RunRecord) error {
+	if logPath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir log dir: %w", err)
+	}
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer f.Close()
+
+	status := "ok"
+	if r.ExitErr != nil {
+		status = r.ExitErr.Error()
+	}
+	header := fmt.Sprintf("[%s] %s (%s) → %s\n",
+		r.Time.Format(time.RFC3339),
+		r.Label,
+		r.Duration.Round(time.Millisecond),
+		status,
+	)
+	body := fmt.Sprintf("  command: %s\n  FILE:     %s\n  FILENAME: %s\n  --- output ---\n",
+		r.Command, r.File, r.Filename,
+	)
+
+	out := strings.TrimRight(string(r.Output), "\n")
+	if out != "" {
+		out += "\n"
+	}
+
+	if _, err := f.WriteString(header + body + out + "  --- end ---\n\n"); err != nil {
+		return fmt.Errorf("write log: %w", err)
+	}
+	return nil
 }

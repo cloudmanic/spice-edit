@@ -13,10 +13,12 @@
 package customactions
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoad_MissingFile confirms the "no config" case is silent — we
@@ -162,5 +164,140 @@ func TestDefaultPath_FallsBackToHome(t *testing.T) {
 	want := filepath.Join("/Users/test", ".config", "spiceedit", "actions.json")
 	if got != want {
 		t.Fatalf("DefaultPath = %q, want %q", got, want)
+	}
+}
+
+// TestLogPath_PrefersXDGState confirms the state location respects
+// XDG_STATE_HOME — distinct from XDG_CONFIG_HOME used by the config
+// file. Logs are app-generated, configs are user-edited; they live
+// in different XDG dirs by design.
+func TestLogPath_PrefersXDGState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/xdgstate")
+	got := LogPath()
+	want := filepath.Join("/tmp/xdgstate", "spiceedit", "actions.log")
+	if got != want {
+		t.Fatalf("LogPath = %q, want %q", got, want)
+	}
+}
+
+// TestLogPath_FallsBackToHome covers the common case — no XDG_STATE_HOME,
+// log lives under ~/.local/state/spiceedit/.
+func TestLogPath_FallsBackToHome(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "/Users/test")
+	got := LogPath()
+	want := filepath.Join("/Users/test", ".local", "state", "spiceedit", "actions.log")
+	if got != want {
+		t.Fatalf("LogPath = %q, want %q", got, want)
+	}
+}
+
+// TestAppendLog_SuccessEntry pins down the line-by-line shape of a
+// successful run's log entry. The format is the editor's main
+// debugging surface — if it changes, tooling that greps the file
+// changes too, so we lock down the structure rather than just
+// "did anything write?"
+func TestAppendLog_SuccessEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "actions.log")
+	rec := RunRecord{
+		Time:     time.Date(2026, 4, 30, 13, 26, 32, 0, time.UTC),
+		Duration: 1234 * time.Millisecond,
+		Label:    "Open on Rager",
+		Command:  `scp "$FILE" rager:~/Downloads/`,
+		File:     "/Users/spicer/dev/foo.txt",
+		Filename: "foo.txt",
+		Output:   []byte("hello\nworld\n"),
+	}
+	if err := AppendLog(path, rec); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(got)
+	for _, fragment := range []string{
+		"[2026-04-30T13:26:32Z] Open on Rager (1.234s) → ok",
+		`  command: scp "$FILE" rager:~/Downloads/`,
+		"  FILE:     /Users/spicer/dev/foo.txt",
+		"  FILENAME: foo.txt",
+		"  --- output ---",
+		"hello\nworld",
+		"  --- end ---",
+	} {
+		if !strings.Contains(body, fragment) {
+			t.Errorf("log missing fragment %q\nfull log:\n%s", fragment, body)
+		}
+	}
+}
+
+// TestAppendLog_FailureRecordsErrorString verifies a failed run lands
+// the error message in the status line so the user can grep for the
+// actual exit error in a sea of successes.
+func TestAppendLog_FailureRecordsErrorString(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "actions.log")
+	rec := RunRecord{
+		Time:    time.Date(2026, 4, 30, 13, 27, 1, 0, time.UTC),
+		Label:   "Open on Cascade",
+		Command: "false",
+		ExitErr: errors.New("exit status 1"),
+		Output:  []byte("ssh: connect refused\n"),
+	}
+	if err := AppendLog(path, rec); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "→ exit status 1") {
+		t.Fatalf("expected exit-status arrow line; got:\n%s", body)
+	}
+	if !strings.Contains(string(body), "ssh: connect refused") {
+		t.Fatalf("expected stderr captured; got:\n%s", body)
+	}
+}
+
+// TestAppendLog_AppendsNotTruncates is the regression test for the
+// O_APPEND flag. Two writes, both entries present, in order.
+func TestAppendLog_AppendsNotTruncates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "actions.log")
+	for _, label := range []string{"first", "second"} {
+		if err := AppendLog(path, RunRecord{
+			Time:  time.Now(),
+			Label: label,
+		}); err != nil {
+			t.Fatalf("AppendLog %s: %v", label, err)
+		}
+	}
+	body, _ := os.ReadFile(path)
+	firstIdx := strings.Index(string(body), "] first")
+	secondIdx := strings.Index(string(body), "] second")
+	if firstIdx < 0 || secondIdx < 0 {
+		t.Fatalf("expected both entries, got:\n%s", body)
+	}
+	if firstIdx >= secondIdx {
+		t.Fatalf("entries out of order:\n%s", body)
+	}
+}
+
+// TestAppendLog_CreatesParentDir confirms a missing directory tree
+// doesn't cause the first action to silently lose its log entry.
+func TestAppendLog_CreatesParentDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "deep", "nested", "actions.log")
+	if err := AppendLog(path, RunRecord{Time: time.Now(), Label: "x"}); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("log file not created: %v", err)
+	}
+}
+
+// TestAppendLog_EmptyPathIsNoOp lets callers pass "" (when LogPath
+// can't resolve a home dir) without producing an error.
+func TestAppendLog_EmptyPathIsNoOp(t *testing.T) {
+	if err := AppendLog("", RunRecord{Label: "x"}); err != nil {
+		t.Fatalf("empty path AppendLog: %v", err)
 	}
 }

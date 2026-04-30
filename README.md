@@ -181,6 +181,37 @@ background goroutine, so a slow `scp` or hanging `ssh` won't freeze
 the editor; success or failure flashes in the status bar when it
 finishes.
 
+### Debugging — every run is logged
+
+Every custom-action invocation appends a record to
+`~/.local/state/spiceedit/actions.log` (or
+`$XDG_STATE_HOME/spiceedit/actions.log` when set). One entry per run,
+human-readable, with the exact command, the env vars that were
+exported, the duration, and the combined stdout / stderr:
+
+```
+[2026-04-30T13:26:32-07:00] Open on Rager (1.234s) → ok
+  command: scp "$FILE" rager:~/Downloads/ && ssh rager open "$HOME/Downloads/$FILENAME"
+  FILE:     /Users/spicer/dev/foo/bar.txt
+  FILENAME: bar.txt
+  --- output ---
+  --- end ---
+
+[2026-04-30T13:27:01-07:00] Open on Cascade (0.521s) → exit status 1
+  command: scp "$FILE" cascade:~/Downloads/ && ssh cascade open "$HOME/Downloads/$FILENAME"
+  FILE:     /Users/spicer/dev/foo/bar.txt
+  FILENAME: bar.txt
+  --- output ---
+  ssh: connect to host cascade port 22: Connection refused
+  lost connection
+  --- end ---
+```
+
+`tail -f ~/.local/state/spiceedit/actions.log` while you click around
+to watch entries roll in. There's no rotation — the file is one-line
+per run plus a few lines of output, so it grows slowly. Delete it
+whenever you want to start fresh.
+
 ### The "open on my laptop" workflow
 
 Both example actions assume `rager` and `cascade` are SSH host aliases

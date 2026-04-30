@@ -1483,9 +1483,27 @@ func (a *App) runCustomAction(idx int) {
 	a.flash(act.Label + "…")
 	scr := a.screen
 	go func() {
+		started := time.Now()
 		cmd := exec.Command("sh", "-c", act.Command)
 		cmd.Env = append(os.Environ(), "FILE="+abs, "FILENAME="+base)
 		out, runErr := cmd.CombinedOutput()
+		duration := time.Since(started)
+
+		// Always log — success or failure — so the user can scroll
+		// back through actions.log when something goes sideways.
+		// Best-effort: a log-write failure must not eat the action's
+		// real error.
+		_ = customactions.AppendLog(customactions.LogPath(), customactions.RunRecord{
+			Time:     started,
+			Duration: duration,
+			Label:    act.Label,
+			Command:  act.Command,
+			File:     abs,
+			Filename: base,
+			ExitErr:  runErr,
+			Output:   out,
+		})
+
 		var finalErr error
 		if runErr != nil {
 			// Tack the first line of stderr/stdout onto the error so
