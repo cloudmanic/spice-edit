@@ -225,6 +225,13 @@ type App struct {
 	// treeRefreshStop signals the background tree-refresh goroutine to exit.
 	treeRefreshStop chan struct{}
 
+	// shiftClickHeld marks that we just opened a modal via Shift+Button1
+	// and are now waiting for the user to release the mouse. While set,
+	// further mouse events are swallowed so the still-held Button1 can't
+	// be misread as a click on a menu row underneath the cursor. Cleared
+	// the moment Button1 goes back to zero.
+	shiftClickHeld bool
+
 	quit bool
 }
 
@@ -612,6 +619,17 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	x, y := ev.Position()
 	btn := ev.Buttons()
 
+	// After a Shift+Button1 click opens a modal we have to ignore further
+	// events until the user fully releases the mouse — otherwise the
+	// motion events with Button1 still held would be read as a click on
+	// whatever row is under the cursor inside the modal we just opened.
+	if a.shiftClickHeld {
+		if btn&tcell.Button1 == 0 {
+			a.shiftClickHeld = false
+		}
+		return
+	}
+
 	// Secondary modals absorb all mouse input. The order here matches
 	// keyboard routing so behavior stays predictable.
 	if a.promptOpen {
@@ -637,11 +655,22 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	// menu with file-management actions for that node; everywhere else
 	// it falls through to the main action menu so users have a redundant
 	// mouse-only path to it.
-	if btn&tcell.Button3 != 0 {
-		if a.tryTreeContextClick(x, y) {
-			return
+	//
+	// Shift+left-click does the same thing as a real right-click. macOS
+	// trackpads and tmux often eat Button3 events, so this gives users a
+	// reliable fallback gesture that every terminal emulator forwards.
+	shiftClick := btn&tcell.Button1 != 0 &&
+		ev.Modifiers()&tcell.ModShift != 0 &&
+		a.dragMode == ""
+	if btn&tcell.Button3 != 0 || shiftClick {
+		if !a.tryTreeContextClick(x, y) {
+			a.openMenu()
 		}
-		a.openMenu()
+		// Latch suppression so the still-held Button1 doesn't immediately
+		// fire a click on a row inside the modal we just opened.
+		if shiftClick {
+			a.shiftClickHeld = true
+		}
 		return
 	}
 

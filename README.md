@@ -123,8 +123,12 @@ Then:
 
 - Click a file in the tree to open it.
 - Click a tab to switch, click the `×` to close it.
-- Click `≡` (top-left), right-click anywhere, or double-tap `Esc`
-  for the action menu (Save, Save & Close, Show/Hide Sidebar, Quit, …).
+- Click `≡` (top-left), right-click anywhere, **Shift+click** anywhere,
+  or double-tap `Esc` for the action menu (Save, Save & Close,
+  Show/Hide Sidebar, Quit, …). Shift+click is a tmux-friendly
+  alternative to right-click since tmux often eats Button3 events.
+- Right-click (or Shift+click) on a file or folder in the tree for
+  per-item actions: New File (folders only), Rename, Delete.
 - Drag the splitter between the sidebar and editor to resize.
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.

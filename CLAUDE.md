@@ -19,9 +19,16 @@ middle, status bar at the bottom. It ships as a single static Go binary
 with no CGO.
 
 Users open the action menu (Save, Quit, Show/Hide Sidebar, …) by clicking
-the `≡` icon, right-clicking, or double-tapping `Esc`. There are
-intentionally **no `Ctrl+` shortcuts** for editor actions — they conflict
-with `tmux` and terminal emulators. Don't add them back.
+the `≡` icon, right-clicking, **Shift+clicking**, or double-tapping `Esc`.
+There are intentionally **no `Ctrl+` shortcuts** for editor actions — they
+conflict with `tmux` and terminal emulators. Don't add them back.
+
+**Shift+click is a deliberate tmux fallback** for right-click. macOS
+trackpads + tmux often swallow Button3, so Shift+Button1 does whatever a
+real right-click would have. Implementation note: the still-held Button1
+is suppressed via `a.shiftClickHeld` until the user releases the mouse,
+otherwise the modal we just opened would immediately receive a row-click
+under the cursor.
 
 ## Module / repo
 
