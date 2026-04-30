@@ -200,6 +200,24 @@ func TestRelativePathFor_InsideRoot(t *testing.T) {
 	}
 }
 
+// TestRelativePathFor_RelativeRootDir is the regression test for the bug
+// where `spiceedit` with no argument leaves App.rootDir = "." while tree
+// and tab paths are absolute — filepath.Rel refuses to mix the two and
+// the helper used to silently fall back to the absolute path. Now we
+// base the relativisation on tree.Root.Path which is always absolute.
+func TestRelativePathFor_RelativeRootDir(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	a.rootDir = "." // simulate `spiceedit` invoked with no argument
+
+	target := filepath.Join(a.tree.Root.Path, "sub", "thing.go")
+	got := a.relativePathFor(target)
+	want := filepath.Join("sub", "thing.go")
+	if got != want {
+		t.Fatalf("relativePathFor with rootDir=\".\": got %q, want %q", got, want)
+	}
+}
+
 // TestAbsolutePathFor_Resolves turns a relative path into a fully-qualified
 // absolute path so the clipboard contents work even if the user pastes
 // into a shell whose cwd doesn't match the editor's root.

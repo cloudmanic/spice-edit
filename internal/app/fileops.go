@@ -335,12 +335,21 @@ func (a *App) copyPathToSystemClipboard(path, label string) {
 	a.flash(fmt.Sprintf("Copied %s: %s", label, path))
 }
 
-// relativePathFor returns path rendered relative to the project root. When
-// filepath.Rel fails (e.g. path is on a different volume than rootDir) we
-// fall back to the absolute path so the user still gets something useful
-// on the clipboard rather than an empty string.
+// relativePathFor returns path rendered relative to the project root. We
+// resolve the root via tree.Root.Path because that is always absolute —
+// App.rootDir keeps the user-supplied string verbatim ("." in the common
+// case), and filepath.Rel refuses to mix a relative base with an absolute
+// target. Tab and tree node paths are always absolute, so basing on the
+// absolute root is what gives a clean repo-relative result.
+//
+// On the rare error path (different volume, etc.) we fall back to the
+// absolute path so the user still gets something useful on the clipboard.
 func (a *App) relativePathFor(path string) string {
-	rel, err := filepath.Rel(a.rootDir, path)
+	base := a.rootDir
+	if a.tree != nil && a.tree.Root != nil {
+		base = a.tree.Root.Path
+	}
+	rel, err := filepath.Rel(base, path)
 	if err != nil {
 		return path
 	}
