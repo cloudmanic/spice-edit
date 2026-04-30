@@ -5,26 +5,26 @@
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// image.go gives Tab a lightweight read-only image viewer mode. PNG / JPEG /
-// GIF (first frame only) are decoded with the Go standard library and
-// rendered into the editor pane using the "half-block" technique: each
-// terminal cell carries U+2580 (▀) with the top half painted in the
-// foreground colour and the bottom half in the background colour, so a
-// single cell encodes two vertical pixels of the source image.
+// image.go gives Tab a lightweight read-only image viewer mode. PNG /
+// JPEG / GIF (first frame only) are decoded with the Go standard
+// library and rendered into the editor pane via the "chafa-lite"
+// adaptive block-character matcher in blockmatch.go: each terminal
+// cell carries the Unicode block glyph that best approximates a 2×2
+// source quadrant, with foreground and background colours chosen to
+// minimise intra-cell error.
 //
-// Resolution is capped by the terminal grid (a typical full-screen view
-// is roughly 160 effective vertical pixels), but the approach has two
-// big advantages over Sixel / iTerm2 / Kitty graphics:
+// Why not Sixel / iTerm2 / Kitty graphics? Real bitmap protocols give
+// higher fidelity but they don't survive the user's actual workflow
+// (Ghostty rejects Sixel; zellij — and tmux without passthrough —
+// strips Kitty). The block-character output is just SGR truecolor
+// escapes, which every truecolor terminal renders and every
+// multiplexer passes through unchanged. Half the resolution of a real
+// bitmap, but it's resolution we always actually get.
 //
-//   1. It works in *every* truecolor-capable terminal, including macOS
-//      Terminal where none of the image protocols are supported.
-//   2. It passes through tmux without any passthrough config — the
-//      output is just SGR truecolor escapes, the same colour codes the
-//      editor already uses everywhere else.
-//
-// We use a nearest-neighbour scaler because it's small, dependency-free,
-// and good enough for a preview. Bilinear / Lanczos would look slightly
-// nicer but pull in golang.org/x/image; not worth it for V1.
+// We use a nearest-neighbour scaler because it's small,
+// dependency-free, and good enough for a preview. Bilinear / Lanczos
+// would look slightly nicer but pull in golang.org/x/image; not worth
+// it.
 
 package editor
 
@@ -47,10 +47,6 @@ import (
 // image instead of text. Lives here (not tab.go) so all the image-only
 // state and behaviour stays close to its definition.
 const imageMode = "image"
-
-// upperHalfBlock is the Unicode glyph used for half-block rendering.
-// Foreground = top pixel, background = bottom pixel.
-const upperHalfBlock = '▀'
 
 // isImageExt reports whether path's extension is one we know how to
 // decode. Case-insensitive so "FOO.PNG" works the same as "foo.png".
@@ -103,93 +99,6 @@ func resizeNearest(src image.Image, w, h int) *image.RGBA {
 	return dst
 }
 
-// halfblockRender draws img into the cell rectangle (x, y, w, h),
-// scaled to fit while preserving aspect ratio and centred inside the
-// rectangle. Each rendered cell is one ▀ character whose foreground
-// = top pixel and background = bottom pixel of the local 1×2 sample.
-//
-// w and h are in *cells*; the underlying pixel grid is therefore
-// w wide and 2*h tall.
-func halfblockRender(scr tcell.Screen, x, y, w, h int, img image.Image) {
-	if img == nil || w <= 0 || h <= 0 {
-		return
-	}
-	bounds := img.Bounds()
-	imgW := bounds.Dx()
-	imgH := bounds.Dy()
-	if imgW == 0 || imgH == 0 {
-		return
-	}
-
-	pxW, pxH := halfblockFitSize(imgW, imgH, w, h)
-	if pxW < 1 || pxH < 2 {
-		return
-	}
-
-	cellsW := pxW
-	cellsH := pxH / 2
-
-	// Centre the image inside the requested rectangle so a small image
-	// doesn't hug the top-left corner.
-	offX := x + (w-cellsW)/2
-	offY := y + (h-cellsH)/2
-
-	resized := resizeNearest(img, pxW, pxH)
-	if resized == nil {
-		return
-	}
-
-	for cy := 0; cy < cellsH; cy++ {
-		for cx := 0; cx < cellsW; cx++ {
-			top := resized.RGBAAt(cx, cy*2)
-			bot := resized.RGBAAt(cx, cy*2+1)
-			fg := tcell.NewRGBColor(int32(top.R), int32(top.G), int32(top.B))
-			bg := tcell.NewRGBColor(int32(bot.R), int32(bot.G), int32(bot.B))
-			st := tcell.StyleDefault.Foreground(fg).Background(bg)
-			scr.SetContent(offX+cx, offY+cy, upperHalfBlock, nil, st)
-		}
-	}
-}
-
-// halfblockFitSize picks the largest (pixelW, pixelH) for an image of
-// (srcW, srcH) that fits inside a (cellW, cellH) cell rectangle while
-// preserving aspect ratio. The pixel grid is one pixel per horizontal
-// cell and two pixels per vertical cell. Returned pxH is always even
-// so we never leave a 1-pixel orphan beneath the last cell row.
-func halfblockFitSize(srcW, srcH, cellW, cellH int) (int, int) {
-	if srcW <= 0 || srcH <= 0 || cellW <= 0 || cellH <= 0 {
-		return 0, 0
-	}
-	maxPxW := cellW
-	maxPxH := cellH * 2
-
-	scaleW := float64(maxPxW) / float64(srcW)
-	scaleH := float64(maxPxH) / float64(srcH)
-	scale := scaleW
-	if scaleH < scale {
-		scale = scaleH
-	}
-
-	pxW := int(float64(srcW) * scale)
-	pxH := int(float64(srcH) * scale)
-	if pxW < 1 {
-		pxW = 1
-	}
-	if pxH < 2 {
-		pxH = 2
-	}
-	if pxW > maxPxW {
-		pxW = maxPxW
-	}
-	if pxH > maxPxH {
-		pxH = maxPxH
-	}
-	if pxH%2 != 0 {
-		pxH--
-	}
-	return pxW, pxH
-}
-
 // renderImage paints the image tab. Called from Tab.Render when
 // Mode == imageMode. The viewport is filled with the editor background
 // colour first so blank cells around a small / non-square image still
@@ -201,6 +110,6 @@ func (t *Tab) renderImage(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			scr.SetContent(cx, cy, ' ', nil, bgStyle)
 		}
 	}
-	halfblockRender(scr, x, y, w, h, t.Image)
+	blockMatchRender(scr, x, y, w, h, t.Image)
 	scr.HideCursor()
 }

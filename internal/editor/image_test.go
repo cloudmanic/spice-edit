@@ -156,48 +156,55 @@ func TestResizeNearest_ZeroOrNilHandled(t *testing.T) {
 	}
 }
 
-// TestHalfblockFitSize_PreservesAspect drives the fitting math through
+// TestBlockMatchFitSize_PreservesAspect drives the fitting math through
 // the four interesting cases: same aspect, source-wider, source-taller,
-// and a degenerate zero-size cell rect.
-func TestHalfblockFitSize_PreservesAspect(t *testing.T) {
+// and a degenerate zero-size cell rect. The matcher samples 2 pixels
+// per cell horizontally and 2 per cell vertically, and compensates for
+// cells being roughly twice as tall as wide on screen — so a square
+// source image lands as roughly cellsW : 2*cellsH source pixels.
+func TestBlockMatchFitSize_PreservesAspect(t *testing.T) {
 	cases := []struct {
-		name                       string
-		srcW, srcH, cellW, cellH   int
-		wantPxW, wantPxH           int
+		name                     string
+		srcW, srcH, cellW, cellH int
+		wantPxW, wantPxH         int
 	}{
-		// 100x100 image into 50x50 cells. Cells give 50px wide × 100px
-		// tall; scaling preserves the source's 1:1 pixel aspect, so the
-		// width (50px) is the binding dimension and pxH lands at 50.
-		// That fills 50 cells horizontally × 25 cells vertically — the
-		// vertical padding is the cost of preserving aspect.
-		{"square fits width", 100, 100, 50, 50, 50, 50},
-		// 200x100 image (wide) into 50x50 cells. Width-bound: scale = 0.25,
-		// pxW = 50, pxH = 25 → rounded down to even = 24.
-		{"wide source", 200, 100, 50, 50, 50, 24},
-		// 100x200 image (tall) into 50x50 cells. Height-bound: scale = 0.5,
-		// pxW = 50, pxH = 100.
-		{"tall source", 100, 200, 50, 50, 50, 100},
+		// 100x100 image into 50x50 cells. scaleW = 50/100 = 0.5,
+		// scaleH = 100/100 = 1.0 → scale = 0.5. pxW = 2*100*0.5 = 100,
+		// pxH = 100*0.5 = 50. Cells: 50 × 25. Screen aspect: 50 wide
+		// × 50 tall (col-w units) — matches the source 1:1.
+		{"square aspect-preserved", 100, 100, 50, 50, 100, 50},
+		// 200x100 image (2:1) into 50x50 cells. Width-bound:
+		// scaleW = 50/200 = 0.25, scaleH = 100/100 = 1.0 → scale = 0.25.
+		// pxW = 2*200*0.25 = 100, pxH = 100*0.25 = 25 → 24 (rounded
+		// even). Cells: 50 × 12.
+		{"wide source", 200, 100, 50, 50, 100, 24},
+		// 100x200 image (1:2 — tall) into 50x50 cells. scaleW = 0.5,
+		// scaleH = 100/200 = 0.5 → scale = 0.5. pxW = 100, pxH = 100.
+		// Cells: 50 × 50.
+		{"tall source", 100, 200, 50, 50, 100, 100},
 		// Zero cell area → zero result.
 		{"zero cells", 100, 100, 0, 10, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotW, gotH := halfblockFitSize(tc.srcW, tc.srcH, tc.cellW, tc.cellH)
+			gotW, gotH := blockMatchFitSize(tc.srcW, tc.srcH, tc.cellW, tc.cellH)
 			if gotW != tc.wantPxW || gotH != tc.wantPxH {
 				t.Fatalf("got %dx%d, want %dx%d", gotW, gotH, tc.wantPxW, tc.wantPxH)
 			}
-			if gotH%2 != 0 && gotH != 0 {
-				t.Fatalf("pxH must be even, got %d", gotH)
+			if (gotW%2 != 0 && gotW != 0) || (gotH%2 != 0 && gotH != 0) {
+				t.Fatalf("pxW and pxH must both be even, got %dx%d", gotW, gotH)
 			}
 		})
 	}
 }
 
-// TestHalfblockRender_DrawsExpectedRunesAndColors paints a small flat
-// red image into a SimulationScreen and asserts every cell that falls
-// inside the rendered rect is the half-block glyph with the right
-// foreground / background colours.
-func TestHalfblockRender_DrawsExpectedRunesAndColors(t *testing.T) {
+// TestBlockMatchRender_SolidColorPaintsBackground paints a uniformly
+// red image into the renderer and asserts every cell that falls inside
+// the rendered rect carries the cheapest possible glyph (space) with
+// background = red. With all four sub-pixels equal, every candidate
+// symbol scores zero error, so the matcher should fall through to the
+// first-listed symbol — space — by tie-break.
+func TestBlockMatchRender_SolidColorPaintsBackground(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -205,42 +212,98 @@ func TestHalfblockRender_DrawsExpectedRunesAndColors(t *testing.T) {
 	defer scr.Fini()
 	scr.SetSize(20, 10)
 
-	// Solid red 4x4 image — every sampled pixel should report (255,0,0).
 	red := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
 			red.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
 		}
 	}
-	halfblockRender(scr, 0, 0, 20, 10, red)
+	blockMatchRender(scr, 0, 0, 20, 10, red)
 	scr.Show()
 
 	cells, w, _ := scr.GetContents()
-	wantFG := tcell.NewRGBColor(255, 0, 0)
-	foundBlock := false
+	wantBG := tcell.NewRGBColor(255, 0, 0)
+	foundCell := false
 	for y := 0; y < 10; y++ {
 		for x := 0; x < w; x++ {
 			c := cells[y*w+x]
-			if len(c.Runes) == 0 || c.Runes[0] != upperHalfBlock {
+			if len(c.Runes) == 0 || c.Runes[0] != ' ' {
 				continue
 			}
-			foundBlock = true
-			fg, bg, _ := c.Style.Decompose()
-			if fg != wantFG || bg != wantFG {
-				t.Fatalf("cell (%d,%d): fg=%v bg=%v, want both = %v",
-					x, y, fg, bg, wantFG)
+			_, bg, _ := c.Style.Decompose()
+			if bg != wantBG {
+				continue
 			}
+			foundCell = true
 		}
 	}
-	if !foundBlock {
-		t.Fatal("expected at least one half-block cell to be drawn")
+	if !foundCell {
+		t.Fatal("expected at least one space cell with red bg")
 	}
 }
 
-// TestHalfblockRender_IgnoresZeroSizedRects guards against panics on
+// TestBlockMatchRender_PicksDistinctSymbolsForCheckerboard pins the
+// adaptive part of the matcher: a high-contrast checkerboard should
+// drive the picker to choose a *non-space, non-full-block* glyph
+// (something like a quadrant or half-block) at least somewhere on
+// screen, proving we're really doing per-cell symbol selection rather
+// than always falling back to the trivial answer.
+func TestBlockMatchRender_PicksDistinctSymbolsForCheckerboard(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(40, 20)
+
+	// 8×8 checkerboard with sharp black/white squares. After resize to
+	// the cell sub-grid, plenty of cells will straddle a boundary and
+	// need a fractional-coverage glyph.
+	check := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			if (x+y)%2 == 0 {
+				check.SetRGBA(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+			} else {
+				check.SetRGBA(x, y, color.RGBA{A: 255})
+			}
+		}
+	}
+	blockMatchRender(scr, 0, 0, 40, 20, check)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	seen := map[rune]bool{}
+	for y := 0; y < 20; y++ {
+		for x := 0; x < w; x++ {
+			c := cells[y*w+x]
+			if len(c.Runes) == 0 {
+				continue
+			}
+			seen[c.Runes[0]] = true
+		}
+	}
+	// Want at least two distinct glyphs in use, and at least one of
+	// those should be a real block character (not just space/full).
+	if len(seen) < 2 {
+		t.Fatalf("checkerboard collapsed to one glyph: %v", seen)
+	}
+	hasBlockGlyph := false
+	for r := range seen {
+		if r != ' ' && r != '█' {
+			hasBlockGlyph = true
+			break
+		}
+	}
+	if !hasBlockGlyph {
+		t.Fatalf("only space / full block found, want a partial block: %v", seen)
+	}
+}
+
+// TestBlockMatchRender_IgnoresZeroSizedRects guards against panics on
 // pathological inputs that the App can produce during a tiny window
 // or right after a resize.
-func TestHalfblockRender_IgnoresZeroSizedRects(t *testing.T) {
+func TestBlockMatchRender_IgnoresZeroSizedRects(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
@@ -251,9 +314,61 @@ func TestHalfblockRender_IgnoresZeroSizedRects(t *testing.T) {
 	red := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	red.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
 
-	halfblockRender(scr, 0, 0, 0, 0, red) // zero size
-	halfblockRender(scr, 0, 0, 5, 5, nil) // nil image
-	halfblockRender(scr, 0, 0, 5, 5, image.NewRGBA(image.Rect(0, 0, 0, 0)))
+	blockMatchRender(scr, 0, 0, 0, 0, red) // zero size
+	blockMatchRender(scr, 0, 0, 5, 5, nil) // nil image
+	blockMatchRender(scr, 0, 0, 5, 5, image.NewRGBA(image.Rect(0, 0, 0, 0)))
+}
+
+// TestMatchBlockCell_FlatSubcellsPicksSpace asserts the tie-break
+// behaviour we rely on elsewhere: when every sub-pixel is identical
+// the matcher emits a space, not a half-block or full block.
+func TestMatchBlockCell_FlatSubcellsPicksSpace(t *testing.T) {
+	red := color.RGBA{R: 255, A: 255}
+	g, _, bg := matchBlockCell([4]color.RGBA{red, red, red, red})
+	if g != ' ' {
+		t.Fatalf("flat cell glyph = %q, want ' '", g)
+	}
+	wantBG := tcell.NewRGBColor(255, 0, 0)
+	if bg != wantBG {
+		t.Fatalf("flat cell bg = %v, want %v", bg, wantBG)
+	}
+}
+
+// TestMatchBlockCell_HorizontalSplitPicksTopHalf checks the matcher
+// picks ▀ (mask 0011 — TL+TR) when the top two sub-pixels are red and
+// the bottom two are blue. fg should land on red, bg on blue.
+func TestMatchBlockCell_HorizontalSplitPicksTopHalf(t *testing.T) {
+	red := color.RGBA{R: 255, A: 255}
+	blue := color.RGBA{B: 255, A: 255}
+	g, fg, bg := matchBlockCell([4]color.RGBA{red, red, blue, blue})
+	if g != '▀' {
+		t.Fatalf("horizontal-split glyph = %q, want '▀'", g)
+	}
+	if fg != tcell.NewRGBColor(255, 0, 0) {
+		t.Fatalf("fg = %v, want red", fg)
+	}
+	if bg != tcell.NewRGBColor(0, 0, 255) {
+		t.Fatalf("bg = %v, want blue", bg)
+	}
+}
+
+// TestMatchBlockCell_OneCornerPicksQuadrant checks the matcher zeroes
+// in on a single-quadrant glyph (▗, mask 1000 — BR only) when only
+// the bottom-right sub-pixel breaks an otherwise-flat cell. fg should
+// be the odd colour, bg should be the dominant one.
+func TestMatchBlockCell_OneCornerPicksQuadrant(t *testing.T) {
+	red := color.RGBA{R: 255, A: 255}
+	blue := color.RGBA{B: 255, A: 255}
+	g, fg, bg := matchBlockCell([4]color.RGBA{red, red, red, blue})
+	if g != '▗' {
+		t.Fatalf("BR-only glyph = %q, want '▗'", g)
+	}
+	if fg != tcell.NewRGBColor(0, 0, 255) {
+		t.Fatalf("fg = %v, want blue", fg)
+	}
+	if bg != tcell.NewRGBColor(255, 0, 0) {
+		t.Fatalf("bg = %v, want red", bg)
+	}
 }
 
 // TestRenderImage_FillsBackground confirms that Tab.renderImage paints
