@@ -376,7 +376,8 @@ func TestHandleConfirmKey_AllBranches(t *testing.T) {
 	}
 }
 
-// TestOpenTreeContext_Folder offers New File + Rename + Delete.
+// TestOpenTreeContext_Folder offers New File + Rename + Delete plus the
+// two clipboard rows.
 func TestOpenTreeContext_Folder(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "child")
@@ -399,10 +400,10 @@ func TestOpenTreeContext_Folder(t *testing.T) {
 	if !a.contextOpen {
 		t.Fatal("context should open")
 	}
-	if len(a.contextItems) != 3 {
-		t.Fatalf("folder context should have 3 items, got %d", len(a.contextItems))
+	wantLabels := []string{"New File", "Rename", "Delete", "Copy rel path", "Copy abs path"}
+	if len(a.contextItems) != len(wantLabels) {
+		t.Fatalf("folder context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
-	wantLabels := []string{"New File", "Rename", "Delete"}
 	for i, w := range wantLabels {
 		if a.contextItems[i].label != w {
 			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
@@ -410,7 +411,8 @@ func TestOpenTreeContext_Folder(t *testing.T) {
 	}
 }
 
-// TestOpenTreeContext_File offers Rename + Delete only.
+// TestOpenTreeContext_File offers Rename + Delete plus the two clipboard
+// rows. New File is folder-only.
 func TestOpenTreeContext_File(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
@@ -429,24 +431,30 @@ func TestOpenTreeContext_File(t *testing.T) {
 		t.Fatal("file node not in tree")
 	}
 	a.openTreeContext(node, 5, 5)
-	if len(a.contextItems) != 2 {
-		t.Fatalf("file context should have 2 items, got %d", len(a.contextItems))
+	wantLabels := []string{"Rename", "Delete", "Copy rel path", "Copy abs path"}
+	if len(a.contextItems) != len(wantLabels) {
+		t.Fatalf("file context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
-	if a.contextItems[0].label != "Rename" || a.contextItems[1].label != "Delete" {
-		t.Fatalf("file context labels: %v", a.contextItems)
+	for i, w := range wantLabels {
+		if a.contextItems[i].label != w {
+			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
+		}
 	}
 }
 
-// TestOpenTreeContext_Root offers New File only — Rename / Delete on the
-// project root would be a footgun.
+// TestOpenTreeContext_Root offers New File and the two clipboard rows —
+// Rename / Delete on the project root would be a footgun.
 func TestOpenTreeContext_Root(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openTreeContext(a.tree.Root, 5, 5)
-	if len(a.contextItems) != 1 {
-		t.Fatalf("root context should have 1 item, got %d", len(a.contextItems))
+	wantLabels := []string{"New File", "Copy rel path", "Copy abs path"}
+	if len(a.contextItems) != len(wantLabels) {
+		t.Fatalf("root context should have %d items, got %d", len(wantLabels), len(a.contextItems))
 	}
-	if a.contextItems[0].label != "New File" {
-		t.Fatalf("root context: got %q", a.contextItems[0].label)
+	for i, w := range wantLabels {
+		if a.contextItems[i].label != w {
+			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
+		}
 	}
 }
 

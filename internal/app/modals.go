@@ -474,9 +474,8 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 		items = append(items, contextItem{label: "Rename", action: ctxRename})
 		items = append(items, contextItem{label: "Delete", action: ctxDelete})
 	}
-	if len(items) == 0 {
-		return
-	}
+	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
+	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
 
 	a.contextNode = n
 	a.contextItems = items

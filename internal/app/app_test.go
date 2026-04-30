@@ -1253,9 +1253,9 @@ func TestHandleMenuMouse_ClicksRowAndOutside(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openMenu()
 	mx, my, _, _ := a.menuModalRect()
-	// Click on the toggle row (relY=19) — flips the sidebar.
+	// Click on the toggle row (relY=21) — flips the sidebar.
 	before := a.sidebarShown
-	a.handleMenuMouse(mx+5, my+19, tcell.Button1)
+	a.handleMenuMouse(mx+5, my+21, tcell.Button1)
 	if a.sidebarShown == before {
 		t.Fatal("expected toggle to fire")
 	}
@@ -1381,20 +1381,20 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 
 // TestMenuLayout_NoCustomActions pins down the baseline geometry: with
 // zero custom actions the modal still has six built-in groups and the
-// height matches the previously-hardcoded value of 23. Catches accidental
+// height matches the expected layout total. Catches accidental
 // off-by-one regressions when someone tweaks the layout helper.
 func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 23 {
-		t.Errorf("modalHeight = %d, want 23", h)
+	if h != 25 {
+		t.Errorf("modalHeight = %d, want 25", h)
 	}
-	if got := len(items); got != 14 {
-		t.Errorf("item count = %d, want 14 built-ins", got)
+	if got := len(items); got != 16 {
+		t.Errorf("item count = %d, want 16 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 14, 18, 20}
+	wantDiv := []int{2, 6, 10, 16, 20, 22}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1417,8 +1417,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 26 { // 23 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 26", h)
+	if h != 28 { // 25 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 28", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

@@ -182,3 +182,64 @@ func TestDeleteFile_Missing(t *testing.T) {
 		t.Fatal("expected error deleting a missing file")
 	}
 }
+
+// TestRelativePathFor_InsideRoot returns a path relative to the project
+// root. This is what the user expects on the clipboard when the editor's
+// "root" is their repo and they want to paste the path into a commit
+// message or another tool inside that same repo.
+func TestRelativePathFor_InsideRoot(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	a.rootDir = dir
+
+	target := filepath.Join(dir, "sub", "thing.go")
+	got := a.relativePathFor(target)
+	want := filepath.Join("sub", "thing.go")
+	if got != want {
+		t.Fatalf("relativePathFor = %q, want %q", got, want)
+	}
+}
+
+// TestAbsolutePathFor_Resolves turns a relative path into a fully-qualified
+// absolute path so the clipboard contents work even if the user pastes
+// into a shell whose cwd doesn't match the editor's root.
+func TestAbsolutePathFor_Resolves(t *testing.T) {
+	got := absolutePathFor("relative/thing.go")
+	if !filepath.IsAbs(got) {
+		t.Fatalf("absolutePathFor returned non-absolute: %q", got)
+	}
+	if !strings.HasSuffix(got, filepath.Join("relative", "thing.go")) {
+		t.Fatalf("absolutePathFor = %q, want suffix relative/thing.go", got)
+	}
+}
+
+// TestMenuCopyPath_NoTabSilent guards against a nil-deref when the user
+// somehow triggers the action without a tab open. The menu disables the
+// row in that case but keyboard activation can still race; the action
+// must be a no-op.
+func TestMenuCopyPath_NoTabSilent(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.menuOpen = true
+	a.menuCopyRelativePath()
+	a.menuOpen = true
+	a.menuCopyAbsolutePath()
+	// Reaching here without a panic is the whole assertion.
+}
+
+// TestCopyPathToSystemClipboard_FlashMessage exercises the shared helper
+// and confirms it sets a status flash so the user gets feedback —
+// silent OSC 52 leaves the user wondering if the copy worked.
+func TestCopyPathToSystemClipboard_FlashMessage(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.copyPathToSystemClipboard("/tmp/sample.go", "relative path")
+	if a.statusMsg == "" {
+		t.Fatal("expected a status flash after copy")
+	}
+	// Either success ("Copied …") or failure ("Copy failed: …") is
+	// acceptable here — the test environment may not have a usable
+	// /dev/tty. The contract is just "user gets feedback."
+	if !strings.Contains(a.statusMsg, "/tmp/sample.go") &&
+		!strings.Contains(a.statusMsg, "Copy failed") {
+		t.Fatalf("status flash didn't mention the path or an error: %q", a.statusMsg)
+	}
+}
