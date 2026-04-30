@@ -133,6 +133,133 @@ Then:
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
+## Custom actions (open remote files on your laptop)
+
+SpiceEdit can read user-defined shell-out actions from
+`~/.config/spiceedit/actions.json` and prepend them to the action menu.
+Each action runs against the **currently open file** when you click it.
+
+The use case this was built for: you SSH from your laptop into a remote
+box, edit a file there, and want to *open it on your laptop* — but
+neither Sixel nor the Kitty graphics protocol survive the trip through
+zellij/tmux. The trick is to bypass the terminal entirely and pipe the
+file back over a second SSH connection.
+
+### File location
+
+`~/.config/spiceedit/actions.json` (or `$XDG_CONFIG_HOME/spiceedit/actions.json`
+when set). The file is optional — without it, the menu just shows the
+built-in actions.
+
+### Schema
+
+```json
+{
+  "actions": [
+    {
+      "label": "Open on Rager",
+      "command": "scp \"$FILE\" rager:~/Downloads/ && ssh rager open \"~/Downloads/$FILENAME\""
+    },
+    {
+      "label": "Open on Cascade",
+      "command": "scp \"$FILE\" cascade:~/Downloads/ && ssh cascade open \"~/Downloads/$FILENAME\""
+    }
+  ]
+}
+```
+
+Each entry needs:
+
+- **`label`** — the menu text (kept under ~30 chars; long labels clip
+  inside the modal).
+- **`command`** — handed to `sh -c` with two env variables exported:
+  - `FILE` — absolute path of the active tab's file
+  - `FILENAME` — basename of the same file
+
+> **`$HOME` and `~` gotcha for two-hop SSH:** the command runs in a
+> shell on the *SpiceEdit host* (the remote box you SSH'd into). So
+> `$HOME` and `~` outside of `ssh "..."` quotes expand to *that* box's
+> home directory, not your laptop's. To run something on your laptop,
+> wrap the remote command in quotes: `ssh rager "open ~/Downloads/$FILENAME"` —
+> `$FILENAME` is expanded locally (you want that — it's a filename),
+> but `~` is sent literally and rager's shell expands it on arrival.
+
+The action only enables when there's a file open. Commands run in a
+background goroutine, so a slow `scp` or hanging `ssh` won't freeze
+the editor; success or failure flashes in the status bar when it
+finishes.
+
+### Debugging — every run is logged
+
+Every custom-action invocation appends a record to
+`~/.local/state/spiceedit/actions.log` (or
+`$XDG_STATE_HOME/spiceedit/actions.log` when set). One entry per run,
+human-readable, with the exact command, the env vars that were
+exported, the duration, and the combined stdout / stderr:
+
+```
+[2026-04-30T13:26:32-07:00] Open on Rager (1.234s) → ok
+  command: scp "$FILE" rager:~/Downloads/ && ssh rager open "$HOME/Downloads/$FILENAME"
+  FILE:     /Users/spicer/dev/foo/bar.txt
+  FILENAME: bar.txt
+  --- output ---
+  --- end ---
+
+[2026-04-30T13:27:01-07:00] Open on Cascade (0.521s) → exit status 1
+  command: scp "$FILE" cascade:~/Downloads/ && ssh cascade open "$HOME/Downloads/$FILENAME"
+  FILE:     /Users/spicer/dev/foo/bar.txt
+  FILENAME: bar.txt
+  --- output ---
+  ssh: connect to host cascade port 22: Connection refused
+  lost connection
+  --- end ---
+```
+
+`tail -f ~/.local/state/spiceedit/actions.log` while you click around
+to watch entries roll in. There's no rotation — the file is one-line
+per run plus a few lines of output, so it grows slowly. Delete it
+whenever you want to start fresh.
+
+### The "open on my laptop" workflow
+
+Both example actions assume `rager` and `cascade` are SSH host aliases
+in the **remote** machine's `~/.ssh/config` that resolve back to your
+laptop. The simplest way to set that up:
+
+1. **On your laptop**, generate (or pick) an SSH key pair you'll
+   dedicate to inbound connections from your remote work box.
+2. **On your laptop**, make sure Remote Login is enabled (System
+   Settings → General → Sharing → Remote Login on macOS) and add the
+   public key to `~/.ssh/authorized_keys`.
+3. **On the remote box**, drop the matching private key into
+   `~/.ssh/id_<name>` and add a host alias:
+
+   ```sshconfig
+   Host rager
+     HostName your-laptop.example.com   # or a Tailscale / mesh hostname
+     User your-mac-username
+     IdentityFile ~/.ssh/id_rager
+   ```
+
+4. Test it by hand from the remote: `ssh rager echo hi`. Once that
+   works, SpiceEdit can drive it the same way.
+
+If your laptop sits behind NAT, point `HostName` at a Tailscale /
+WireGuard / Cloudflare-tunnel address — anywhere the remote can reach
+the laptop directly. The action itself is just `scp` + `ssh`; it
+doesn't care how the network gets there.
+
+### Anything else `sh` can do
+
+The schema is deliberately small. If you can write it on one shell
+line, you can put it in `actions.json`:
+
+```json
+{ "label": "Send to ChatGPT", "command": "cat \"$FILE\" | pbcopy && open https://chat.openai.com/" }
+{ "label": "Lint with eslint", "command": "cd $(dirname \"$FILE\") && eslint \"$FILENAME\"" }
+{ "label": "Run formatter",    "command": "gofmt -w \"$FILE\"" }
+```
+
 ## Project layout
 
 ```
@@ -143,6 +270,7 @@ Then:
 │   ├── editor/               # Buffer, tab, cursor, syntax highlighting
 │   ├── filetree/             # Lazy directory tree with identity-preserving refresh
 │   ├── clipboard/            # OSC 52 clipboard with tmux passthrough
+│   ├── customactions/        # Loader for ~/.config/spiceedit/actions.json
 │   ├── theme/                # Tokyo Night-inspired palette
 │   └── version/              # Single-line version constant
 ├── .github/workflows/        # Auto-release pipeline
