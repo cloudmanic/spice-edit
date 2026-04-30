@@ -135,6 +135,10 @@ Then:
 
 ## Custom actions (open remote files on your laptop)
 
+[![Watch the walkthrough](https://img.youtube.com/vi/vDWZWEmIiZ8/maxresdefault.jpg)](https://www.youtube.com/watch?v=vDWZWEmIiZ8)
+
+> 📺 [Custom actions walkthrough on YouTube](https://www.youtube.com/watch?v=vDWZWEmIiZ8)
+
 SpiceEdit can read user-defined shell-out actions from
 `~/.config/spiceedit/actions.json` and prepend them to the action menu.
 Each action runs against the **currently open file** when you click it.
