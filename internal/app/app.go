@@ -38,7 +38,7 @@ import (
 const (
 	sidebarWidth   = 30
 	minWidth       = 50
-	minHeight      = 14
+	minHeight      = 17
 	statusFlashFor = 3 * time.Second
 	doubleClickMs  = 500 * time.Millisecond
 	doubleEscMs    = 500 * time.Millisecond
@@ -59,7 +59,7 @@ const (
 	// ("Save & close tab") plus chevron and padding; height is fixed by
 	// the layout below.
 	modalWidth  = 38
-	modalHeight = 13
+	modalHeight = 15
 
 	// autoScrollTick is how often the auto-scroll goroutine emits a tick
 	// while the user is drag-selecting with the cursor parked outside the
@@ -107,30 +107,35 @@ type clickRecord struct {
 // the user, the y-offset it lives at inside the modal, the action it runs
 // when clicked, and a predicate that returns true when the action is
 // applicable in the current context (so we can dim non-applicable rows).
+//
+// labelFor is an optional dynamic-label hook: when non-nil, drawMenu calls
+// it instead of using the static label string. Used by toggle-style rows
+// whose label depends on app state ("Show / Hide file explorer").
 type menuItemDef struct {
-	label   string
-	relY    int
-	action  func(*App)
-	enabled func(*App) bool
+	label    string
+	relY     int
+	action   func(*App)
+	enabled  func(*App) bool
+	labelFor func(*App) string
 }
 
 // menuItems is the full list of menu actions, in display order. Their relY
 // fields are absolute row offsets inside the modal — see drawMenu for the
 // surrounding box drawing.
 var menuItems = []menuItemDef{
-	{"Save", 3, (*App).menuSave, (*App).hasSavableTab},
-	{"Save & close tab", 4, (*App).menuSaveAndClose, (*App).hasSavableTab},
-	{"Close tab", 5, (*App).menuClose, (*App).hasTab},
-	{"Copy selection", 7, (*App).menuCopy, (*App).hasSelection},
-	{"Cut selection", 8, (*App).menuCut, (*App).hasSelection},
-	{"Paste", 9, (*App).menuPaste, (*App).hasClipboard},
+	{label: "Save", relY: 3, action: (*App).menuSave, enabled: (*App).hasSavableTab},
+	{label: "Save & close tab", relY: 4, action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
+	{label: "Close tab", relY: 5, action: (*App).menuClose, enabled: (*App).hasTab},
+	{label: "Copy selection", relY: 7, action: (*App).menuCopy, enabled: (*App).hasSelection},
+	{label: "Cut selection", relY: 8, action: (*App).menuCut, enabled: (*App).hasSelection},
+	{label: "Paste", relY: 9, action: (*App).menuPaste, enabled: (*App).hasClipboard},
+	{relY: 11, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
 	// Manual tree refresh — disabled in favour of the 10s background poller,
-	// but left here (and menuRefreshTree below) so we can drop it back into
-	// the menu by uncommenting these two pieces. To re-enable: bump
-	// modalHeight to 15, change Quit's relY to 13, and add 12 to the
-	// dividers slice in drawMenu.
-	// {"Refresh tree", 11, (*App).menuRefreshTree, alwaysTrue},
-	{"Quit editor", 11, (*App).menuQuit, alwaysTrue},
+	// but menuRefreshTree below stays so we can re-add the row later by
+	// picking a free relY (and adjusting modalHeight + dividers if you
+	// want it in its own group).
+	// {label: "Refresh tree", relY: ?, action: (*App).menuRefreshTree, enabled: alwaysTrue},
+	{label: "Quit editor", relY: 13, action: (*App).menuQuit, enabled: alwaysTrue},
 }
 
 // alwaysTrue is the default predicate for actions that are always applicable
@@ -148,6 +153,10 @@ type App struct {
 	activeTab int
 
 	width, height int
+
+	// sidebarShown controls whether the file explorer panel is visible.
+	// When false the editor and tab bar fill the whole window.
+	sidebarShown bool
 
 	clipBuf      string
 	statusMsg    string
@@ -199,12 +208,13 @@ func New(rootDir string) (*App, error) {
 	}
 
 	a := &App{
-		screen:          scr,
-		theme:           th,
-		rootDir:         rootDir,
-		tree:            tree,
-		pendingClose:    -1,
-		hoveredMenuRow:  -1,
+		screen:         scr,
+		theme:          th,
+		rootDir:        rootDir,
+		tree:           tree,
+		pendingClose:   -1,
+		hoveredMenuRow: -1,
+		sidebarShown:   true,
 	}
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
@@ -346,20 +356,35 @@ func (a *App) reconcileOpenTabsWithDisk() {
 // Layout helpers
 // -----------------------------------------------------------------------------
 
-// sidebarRect returns the file tree panel's screen rectangle.
+// sidebarW is the effective sidebar width: zero when the panel is hidden,
+// the layout constant otherwise. Every layout helper and click router that
+// used to reference sidebarWidth directly now goes through this so toggling
+// the panel reshapes the entire UI in one place.
+func (a *App) sidebarW() int {
+	if !a.sidebarShown {
+		return 0
+	}
+	return sidebarWidth
+}
+
+// sidebarRect returns the file tree panel's screen rectangle. When the
+// sidebar is hidden the returned rect has zero width — the caller should
+// also consult a.sidebarShown before drawing into it.
 func (a *App) sidebarRect() (x, y, w, h int) {
-	return 0, 0, sidebarWidth, a.height - 1
+	return 0, 0, a.sidebarW(), a.height - 1
 }
 
 // tabBarRect returns the tab bar's screen rectangle (one row tall).
 func (a *App) tabBarRect() (x, y, w, h int) {
-	return sidebarWidth, 0, a.width - sidebarWidth, 1
+	sw := a.sidebarW()
+	return sw, 0, a.width - sw, 1
 }
 
 // editorRect returns the editor body's screen rectangle (everything to the
 // right of the sidebar, between the tab bar and the status bar).
 func (a *App) editorRect() (x, y, w, h int) {
-	return sidebarWidth, 1, a.width - sidebarWidth, a.height - 2
+	sw := a.sidebarW()
+	return sw, 1, a.width - sw, a.height - 2
 }
 
 // statusRect returns the status bar's screen rectangle (full-width bottom row).
@@ -375,9 +400,10 @@ func (a *App) editorSize() (int, int) {
 }
 
 // menuButtonRect returns the on-screen rectangle of the ≡ icon in the tab
-// bar. Click hit-tests in tabBarClick consult this directly.
+// bar. Click hit-tests in tabBarClick consult this directly. When the
+// sidebar is hidden the icon shifts left to fill the corner.
 func (a *App) menuButtonRect() (x, y, w, h int) {
-	return sidebarWidth, 0, menuButtonWidth, 1
+	return a.sidebarW(), 0, menuButtonWidth, 1
 }
 
 // menuModalRect returns the on-screen rectangle of the action modal,
@@ -529,8 +555,9 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
+		sw := a.sidebarW()
 		switch {
-		case x < sidebarWidth:
+		case sw > 0 && x < sw:
 			a.sidebarClick(x, y)
 		case y == 0:
 			a.tabBarClick(x, y)
@@ -572,7 +599,7 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
-	if x < sidebarWidth {
+	if sw := a.sidebarW(); sw > 0 && x < sw {
 		a.tree.Scroll(delta)
 		return
 	}
@@ -602,7 +629,8 @@ func (a *App) sidebarClick(x, y int) {
 // cells open the action menu; remaining cells switch or close tabs based on
 // where the click landed within their rendered geometry.
 func (a *App) tabBarClick(x, _ int) {
-	if x >= sidebarWidth && x < sidebarWidth+menuButtonWidth {
+	sw := a.sidebarW()
+	if x >= sw && x < sw+menuButtonWidth {
 		a.openMenu()
 		return
 	}
@@ -1086,6 +1114,23 @@ func (a *App) menuRefreshTree() {
 	a.flash("File tree refreshed")
 }
 
+// menuToggleSidebar shows or hides the file explorer panel. The editor and
+// tab bar reflow to fill the freed cells when the panel is hidden, and
+// snap back when it returns.
+func (a *App) menuToggleSidebar() {
+	a.closeMenu()
+	a.sidebarShown = !a.sidebarShown
+}
+
+// sidebarToggleLabel returns the label the toggle row should display given
+// the current sidebar state. Drawn dynamically by drawMenu.
+func (a *App) sidebarToggleLabel() string {
+	if a.sidebarShown {
+		return "Hide file explorer"
+	}
+	return "Show file explorer"
+}
+
 // menuQuit exits the editor.
 func (a *App) menuQuit() {
 	a.closeMenu()
@@ -1106,8 +1151,10 @@ func (a *App) draw() {
 		return
 	}
 
-	sx, sy, sw, sh := a.sidebarRect()
-	a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+	if a.sidebarShown {
+		sx, sy, sw, sh := a.sidebarRect()
+		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+	}
 
 	a.drawTabBar()
 
@@ -1133,7 +1180,7 @@ func (a *App) draw() {
 //	×, and a trailing space.
 func (a *App) layoutTabs() []tabRect {
 	out := make([]tabRect, 0, len(a.tabs))
-	cursor := sidebarWidth + menuButtonWidth
+	cursor := a.sidebarW() + menuButtonWidth
 	for i, t := range a.tabs {
 		nameLen := len([]rune(t.DisplayName()))
 		w := 1 + 2 + nameLen + 1 + 1 + 1 // pad+dirty+name+space+×+pad
@@ -1336,7 +1383,7 @@ func (a *App) drawMenu() {
 	}
 
 	// Horizontal dividers between action groups.
-	for _, dy := range []int{2, 6, 10} {
+	for _, dy := range []int{2, 6, 10, 12} {
 		cy := my + dy
 		a.screen.SetContent(mx, cy, '├', nil, borderStyle)
 		a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)
@@ -1387,8 +1434,14 @@ func (a *App) drawMenu() {
 			labelStyle = mutedStyle
 			chevStyle = mutedStyle
 		}
+		// Dynamic label (e.g. the file-explorer toggle row) takes precedence
+		// over the static one when present.
+		label := item.label
+		if item.labelFor != nil {
+			label = item.labelFor(a)
+		}
 		drawAt(a.screen, mx+2, cy, "▸", chevStyle)
-		drawAt(a.screen, mx+4, cy, item.label, labelStyle)
+		drawAt(a.screen, mx+4, cy, label, labelStyle)
 	}
 
 	a.screen.HideCursor()
