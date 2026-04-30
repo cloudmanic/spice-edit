@@ -1405,31 +1405,32 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	}
 }
 
-// TestMenuLayout_WithCustomActions checks the prepend-and-divide
-// behaviour: two custom actions add a fresh group, an extra divider,
-// and grow the modal by 3 rows (2 items + 1 divider). The first row
-// is the first custom action.
+// TestMenuLayout_WithCustomActions checks the splice-before-Quit
+// behaviour: two custom actions land as their own group sitting
+// directly above the Quit row, with a divider on each side. Modal
+// height grows by 3 rows (2 items + 1 divider).
 func TestMenuLayout_WithCustomActions(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.customActions = []customactions.Action{
 		{Label: "Open on Rager", Command: "echo r"},
 		{Label: "Open on Cascade", Command: "echo c"},
 	}
-	items, dividers, h := a.menuLayout()
+	items, _, h := a.menuLayout()
 
 	if h != 26 { // 23 + 2 items + 1 divider
 		t.Errorf("modalHeight = %d, want 26", h)
 	}
-	if got := items[0].label; got != "Open on Rager" {
-		t.Errorf("first row label = %q, want %q", got, "Open on Rager")
+	// Custom actions should be the second-to-last and third-to-last
+	// rows, with Quit as the final row.
+	last := len(items) - 1
+	if items[last].label != "Quit editor" {
+		t.Fatalf("last row = %q, want Quit editor", items[last].label)
 	}
-	if items[0].relY != 3 {
-		t.Errorf("first row relY = %d, want 3", items[0].relY)
+	if items[last-1].label != "Open on Cascade" {
+		t.Errorf("row above Quit = %q, want Open on Cascade", items[last-1].label)
 	}
-	// The new group's trailing divider must live between the custom
-	// actions and the first built-in group.
-	if dividers[1] != 5 {
-		t.Errorf("custom-group divider = %d, want 5", dividers[1])
+	if items[last-2].label != "Open on Rager" {
+		t.Errorf("two above Quit = %q, want Open on Rager", items[last-2].label)
 	}
 }
 
@@ -1461,6 +1462,9 @@ func TestRunCustomAction_OutOfRange(t *testing.T) {
 // lands on the screen's event queue. The chosen command writes a
 // marker file that lets the test verify env reached the subprocess.
 func TestRunCustomAction_ExecutesAndPostsEvent(t *testing.T) {
+	// Redirect the action log into the test's temp dir so we don't
+	// scribble into the developer's real ~/.local/state/spiceedit/.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := t.TempDir()
 	target := filepath.Join(dir, "src.txt")
 	if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {

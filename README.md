@@ -176,6 +176,14 @@ Each entry needs:
   - `FILE` — absolute path of the active tab's file
   - `FILENAME` — basename of the same file
 
+> **`$HOME` and `~` gotcha for two-hop SSH:** the command runs in a
+> shell on the *SpiceEdit host* (the remote box you SSH'd into). So
+> `$HOME` and `~` outside of `ssh "..."` quotes expand to *that* box's
+> home directory, not your laptop's. To run something on your laptop,
+> wrap the remote command in quotes: `ssh rager "open ~/Downloads/$FILENAME"` —
+> `$FILENAME` is expanded locally (you want that — it's a filename),
+> but `~` is sent literally and rager's shell expands it on arrival.
+
 The action only enables when there's a file open. Commands run in a
 background goroutine, so a slow `scp` or hanging `ssh` won't freeze
 the editor; success or failure flashes in the status bar when it

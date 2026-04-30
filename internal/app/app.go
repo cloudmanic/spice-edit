@@ -190,11 +190,13 @@ func alwaysTrue(*App) bool { return true }
 // menuLayout flattens the visible menu groups into a single ordered
 // slice of items with relY positions assigned, plus the divider rows
 // and the modal's total cell height. Custom actions (when configured)
-// are prepended as their own group so they read like first-class menu
-// rows. Recomputed on every call — cheap, and lets the layout react
-// when actions.json is reloaded mid-session.
+// get spliced in as their own group right before the Quit row, so
+// they sit at the bottom of the menu where the user reaches for
+// "what do I do with this file" actions. Recomputed on every call —
+// cheap, and lets the layout react when actions.json is reloaded
+// mid-session.
 func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int) {
-	groups := [][]menuItemDef{}
+	groups := append([][]menuItemDef{}, builtinMenuGroups()...)
 	if len(a.customActions) > 0 {
 		ca := make([]menuItemDef, 0, len(a.customActions))
 		for i := range a.customActions {
@@ -205,9 +207,12 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 				enabled: (*App).hasFileTab,
 			})
 		}
-		groups = append(groups, ca)
+		// Splice in just before the final group (Quit). builtinMenuGroups
+		// guarantees Quit is last; if anyone reorders that, the test
+		// pinning custom-actions placement catches it.
+		quit := groups[len(groups)-1]
+		groups = append(groups[:len(groups)-1], ca, quit)
 	}
-	groups = append(groups, builtinMenuGroups()...)
 
 	// Title at relY 1, divider under it at relY 2, first item at relY 3.
 	dividers = []int{2}
