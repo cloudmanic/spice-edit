@@ -1,0 +1,448 @@
+// =============================================================================
+// File: internal/editor/tab.go
+// Author: Spicer Matthews <spicer@cloudmanic.com>
+// Created: 2026-04-29
+// Copyright: 2026 Cloudmanic, LLC. All rights reserved.
+// =============================================================================
+
+package editor
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/gdamore/tcell/v2"
+
+	"github.com/cloudmanic/spiceedit/internal/theme"
+)
+
+// gutterWidth is the cell width reserved for the line-number column inside
+// the editor area. Six gives us up to five-digit line numbers plus a one-cell
+// pad on the right — comfortable for files of any realistic length.
+const gutterWidth = 6
+
+// Tab is a single open file. It owns the on-disk path, the in-memory buffer,
+// the per-tab view state (scroll position, cursor, selection anchor), the
+// cached syntax-highlight styles, and a dirty flag.
+type Tab struct {
+	Path       string  // Empty for an unsaved/scratch tab.
+	Buffer     *Buffer
+	Cursor     Position // Where new typed text appears.
+	Anchor     Position // Selection anchor; equals Cursor when nothing is selected.
+	ScrollY    int      // Index of the first visible line.
+	ScrollX    int      // Index of the first visible column (rune-indexed).
+	Dirty      bool
+	Styles     [][]tcell.Style
+	StyleStale bool
+
+	// cursorMoved is set by every method that changes Cursor; Render
+	// consumes it to decide whether to scroll the viewport so the cursor
+	// is visible. Without this flag, mouse-wheel scrolling is fought by
+	// every redraw — EnsureVisible would snap us back to the cursor.
+	cursorMoved bool
+}
+
+// NewTab opens path and returns a Tab. If the file does not exist, the tab
+// is created with an empty buffer that will be written on first save —
+// matching what most editors do when you "open" a brand-new file path.
+func NewTab(path string) (*Tab, error) {
+	var data []byte
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		data = b
+	}
+	return &Tab{
+		Path:       path,
+		Buffer:     NewBuffer(string(data)),
+		StyleStale: true,
+	}, nil
+}
+
+// DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
+func (t *Tab) DisplayName() string {
+	if t.Path == "" {
+		return "untitled"
+	}
+	return filepath.Base(t.Path)
+}
+
+// Save writes the buffer to disk and clears Dirty. It is an error to call
+// Save on an untitled tab — callers should prompt for a path first.
+func (t *Tab) Save() error {
+	if t.Path == "" {
+		return fmt.Errorf("no path set for tab")
+	}
+	if err := os.WriteFile(t.Path, []byte(t.Buffer.String()), 0644); err != nil {
+		return err
+	}
+	t.Dirty = false
+	return nil
+}
+
+// HasSelection reports whether the tab currently has a non-empty selection.
+func (t *Tab) HasSelection() bool {
+	return t.Cursor != t.Anchor
+}
+
+// SelectionText returns the currently selected text, or "" if nothing is
+// selected. The text is always returned in document order.
+func (t *Tab) SelectionText() string {
+	if !t.HasSelection() {
+		return ""
+	}
+	return t.Buffer.Substring(t.Anchor, t.Cursor)
+}
+
+// DeleteSelection removes the selected range and collapses the cursor to the
+// start of the selection. A no-op when nothing is selected.
+func (t *Tab) DeleteSelection() {
+	if !t.HasSelection() {
+		return
+	}
+	pos := t.Buffer.DeleteRange(t.Anchor, t.Cursor)
+	t.Cursor = pos
+	t.Anchor = pos
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
+}
+
+// InsertString inserts s at the cursor (replacing any selection first) and
+// advances the cursor past the inserted text.
+func (t *Tab) InsertString(s string) {
+	if t.HasSelection() {
+		t.DeleteSelection()
+	}
+	t.Cursor = t.Buffer.InsertString(t.Cursor, s)
+	t.Anchor = t.Cursor
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
+}
+
+// InsertRune is a convenience wrapper around InsertString for a single rune.
+func (t *Tab) InsertRune(r rune) {
+	t.InsertString(string(r))
+}
+
+// Backspace deletes the character before the cursor (or the selection if any).
+func (t *Tab) Backspace() {
+	if t.HasSelection() {
+		t.DeleteSelection()
+		return
+	}
+	if t.Cursor.Line == 0 && t.Cursor.Col == 0 {
+		return
+	}
+	var prev Position
+	if t.Cursor.Col == 0 {
+		prev.Line = t.Cursor.Line - 1
+		prev.Col = len([]rune(t.Buffer.Lines[prev.Line]))
+	} else {
+		prev = Position{Line: t.Cursor.Line, Col: t.Cursor.Col - 1}
+	}
+	t.Cursor = t.Buffer.DeleteRange(prev, t.Cursor)
+	t.Anchor = t.Cursor
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
+}
+
+// Delete removes the character after the cursor (or the selection if any).
+func (t *Tab) Delete() {
+	if t.HasSelection() {
+		t.DeleteSelection()
+		return
+	}
+	end := t.Buffer.EndPos()
+	if t.Cursor == end {
+		return
+	}
+	var next Position
+	line := []rune(t.Buffer.Lines[t.Cursor.Line])
+	if t.Cursor.Col >= len(line) {
+		next = Position{Line: t.Cursor.Line + 1, Col: 0}
+	} else {
+		next = Position{Line: t.Cursor.Line, Col: t.Cursor.Col + 1}
+	}
+	t.Cursor = t.Buffer.DeleteRange(t.Cursor, next)
+	t.Anchor = t.Cursor
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
+}
+
+// MoveCursor shifts the cursor by (dLine, dCol). When extend is true the
+// anchor is left in place so the user is extending a selection.
+func (t *Tab) MoveCursor(dLine, dCol int, extend bool) {
+	cur := t.Cursor
+	if dLine != 0 {
+		cur.Line += dLine
+		if cur.Line < 0 {
+			cur.Line = 0
+		}
+		if cur.Line >= t.Buffer.LineCount() {
+			cur.Line = t.Buffer.LineCount() - 1
+		}
+		runes := []rune(t.Buffer.Lines[cur.Line])
+		if cur.Col > len(runes) {
+			cur.Col = len(runes)
+		}
+	}
+	if dCol != 0 {
+		cur.Col += dCol
+		if cur.Col < 0 {
+			// Wrap to the end of the previous line.
+			if cur.Line > 0 {
+				cur.Line--
+				cur.Col = len([]rune(t.Buffer.Lines[cur.Line]))
+			} else {
+				cur.Col = 0
+			}
+		} else {
+			runes := []rune(t.Buffer.Lines[cur.Line])
+			if cur.Col > len(runes) {
+				if cur.Line < t.Buffer.LineCount()-1 {
+					cur.Line++
+					cur.Col = 0
+				} else {
+					cur.Col = len(runes)
+				}
+			}
+		}
+	}
+	t.Cursor = cur
+	if !extend {
+		t.Anchor = cur
+	}
+	t.cursorMoved = true
+}
+
+// MoveCursorTo sets the cursor to a specific buffer position. Position is
+// clamped within the buffer; extend=true preserves the selection anchor.
+func (t *Tab) MoveCursorTo(p Position, extend bool) {
+	p = t.Buffer.Clamp(p)
+	t.Cursor = p
+	if !extend {
+		t.Anchor = p
+	}
+	t.cursorMoved = true
+}
+
+// MoveLineHome moves the cursor to column 0 of the current line.
+func (t *Tab) MoveLineHome(extend bool) {
+	t.Cursor.Col = 0
+	if !extend {
+		t.Anchor = t.Cursor
+	}
+	t.cursorMoved = true
+}
+
+// MoveLineEnd moves the cursor to the last column of the current line.
+func (t *Tab) MoveLineEnd(extend bool) {
+	t.Cursor.Col = len([]rune(t.Buffer.Lines[t.Cursor.Line]))
+	if !extend {
+		t.Anchor = t.Cursor
+	}
+	t.cursorMoved = true
+}
+
+// SelectAll selects the entire buffer (anchor at start, cursor at end).
+func (t *Tab) SelectAll() {
+	t.Anchor = Position{Line: 0, Col: 0}
+	t.Cursor = t.Buffer.EndPos()
+	t.cursorMoved = true
+}
+
+// EnsureVisible scrolls the viewport so the cursor is on screen. The
+// caller passes the editor area's width and height because the Tab itself
+// doesn't know its render rect.
+func (t *Tab) EnsureVisible(viewW, viewH int) {
+	contentW := viewW - gutterWidth - 1
+	if contentW < 1 {
+		contentW = 1
+	}
+	if t.Cursor.Line < t.ScrollY {
+		t.ScrollY = t.Cursor.Line
+	}
+	if t.Cursor.Line >= t.ScrollY+viewH {
+		t.ScrollY = t.Cursor.Line - viewH + 1
+	}
+	if t.Cursor.Col < t.ScrollX {
+		t.ScrollX = t.Cursor.Col
+	}
+	if t.Cursor.Col >= t.ScrollX+contentW {
+		t.ScrollX = t.Cursor.Col - contentW + 1
+	}
+	if t.ScrollY < 0 {
+		t.ScrollY = 0
+	}
+	if t.ScrollX < 0 {
+		t.ScrollX = 0
+	}
+}
+
+// Render draws the editor's content (line numbers, code with syntax
+// highlighting, selection, cursor) into the rectangle (x, y, w, h).
+func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+	if t.StyleStale {
+		t.Styles = Highlight(t.Path, t.Buffer.String(), th)
+		t.StyleStale = false
+	}
+	// Only re-center on the cursor if the cursor moved this tick. Doing it
+	// every render fights the user when they scroll with the wheel.
+	if t.cursorMoved {
+		t.EnsureVisible(w, h)
+		t.cursorMoved = false
+	}
+	t.clampScroll(h)
+
+	bg := th.BG
+	bgStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text)
+
+	// Paint the entire editor rectangle with the base background first so
+	// any cells we don't draw (short lines, blank rows) still get themed.
+	for cy := y; cy < y+h; cy++ {
+		for cx := x; cx < x+w; cx++ {
+			scr.SetContent(cx, cy, ' ', nil, bgStyle)
+		}
+	}
+
+	selStart, selEnd := PosOrdered(t.Anchor, t.Cursor)
+	hasSel := t.HasSelection()
+
+	contentX := x + gutterWidth + 1
+	contentW := w - gutterWidth - 1
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	for row := 0; row < h; row++ {
+		lineIdx := t.ScrollY + row
+		if lineIdx >= t.Buffer.LineCount() {
+			break
+		}
+		cy := y + row
+		isCursorLine := lineIdx == t.Cursor.Line
+
+		// Pick the row background — a hair lighter on the cursor's line so
+		// the eye can catch where the caret is from across the screen.
+		lineBg := bg
+		if isCursorLine {
+			lineBg = th.LineHL
+		}
+		lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
+
+		// Re-paint this row with its (possibly highlighted) bg.
+		for cx := x; cx < x+w; cx++ {
+			scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
+		}
+
+		// Gutter / line number, right-aligned with one trailing space.
+		numStr := fmt.Sprintf("%*d", gutterWidth-1, lineIdx+1)
+		gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+		if isCursorLine {
+			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
+		}
+		for i, r := range numStr {
+			scr.SetContent(x+i, cy, r, nil, gutterStyle)
+		}
+
+		// Line content, with syntax styles, selection bg, and line bg.
+		runes := []rune(t.Buffer.Lines[lineIdx])
+		var styles []tcell.Style
+		if lineIdx < len(t.Styles) {
+			styles = t.Styles[lineIdx]
+		}
+		for col := 0; col < contentW; col++ {
+			srcCol := t.ScrollX + col
+			if srcCol >= len(runes) {
+				break
+			}
+			r := runes[srcCol]
+			st := bgStyle
+			if srcCol < len(styles) {
+				st = styles[srcCol]
+			}
+			st = st.Background(lineBg)
+			if hasSel {
+				p := Position{Line: lineIdx, Col: srcCol}
+				if !PosLess(p, selStart) && PosLess(p, selEnd) {
+					st = st.Background(th.Selection)
+				}
+			}
+			scr.SetContent(contentX+col, cy, r, nil, st)
+		}
+	}
+
+	// Position the hardware cursor at the buffer cursor's screen coordinates.
+	cy := y + (t.Cursor.Line - t.ScrollY)
+	cx := contentX + (t.Cursor.Col - t.ScrollX)
+	if cy >= y && cy < y+h && cx >= contentX && cx < contentX+contentW {
+		scr.ShowCursor(cx, cy)
+	} else {
+		scr.HideCursor()
+	}
+}
+
+// HitTest converts screen coordinates within this tab's render area to a
+// buffer position. ok=false means the click was outside any line.
+func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
+	if localY < 0 || localY >= h {
+		return Position{}, false
+	}
+	contentX := gutterWidth + 1
+	line := t.ScrollY + localY
+	if line < 0 || line >= t.Buffer.LineCount() {
+		return Position{}, false
+	}
+	if localX < contentX {
+		// Click in the gutter — treat as click at column 0 of that line.
+		return Position{Line: line, Col: 0}, true
+	}
+	col := t.ScrollX + (localX - contentX)
+	runes := []rune(t.Buffer.Lines[line])
+	if col > len(runes) {
+		col = len(runes)
+	}
+	if col < 0 {
+		col = 0
+	}
+	return Position{Line: line, Col: col}, true
+}
+
+// Scroll moves the viewport by delta lines (negative = up). Render runs
+// clampScroll afterwards so the user never scrolls into pure void; here we
+// just adjust the raw value.
+func (t *Tab) Scroll(deltaLines int) {
+	t.ScrollY += deltaLines
+	if t.ScrollY < 0 {
+		t.ScrollY = 0
+	}
+}
+
+// clampScroll keeps ScrollY inside a sensible range for the current viewport
+// height. The max is "last line still on screen, plus a small overscroll
+// pad" so the user can scroll the bottom of the file up to the middle of
+// the viewport — which feels much better than abruptly stopping when the
+// last line hits the bottom row.
+func (t *Tab) clampScroll(viewH int) {
+	if t.ScrollY < 0 {
+		t.ScrollY = 0
+	}
+	overscroll := viewH / 2
+	if overscroll < 3 {
+		overscroll = 3
+	}
+	max := t.Buffer.LineCount() - viewH + overscroll
+	if max < 0 {
+		max = 0
+	}
+	if t.ScrollY > max {
+		t.ScrollY = max
+	}
+}
