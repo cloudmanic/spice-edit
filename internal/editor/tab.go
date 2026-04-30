@@ -9,6 +9,7 @@ package editor
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"time"
@@ -61,12 +62,26 @@ type Tab struct {
 	undoOriginal  snapshot
 	lastUndoGroup undoGroup
 	lastUndoAt    time.Time
+
+	// Mode is "" for a normal text tab and imageMode (= "image") for a
+	// read-only image preview. Image tabs reuse the Tab type so the
+	// app's tab list, switcher, and modal-routing all just work — the
+	// content-mutating methods short-circuit on imageMode and Render
+	// delegates to renderImage. See image.go for the render path.
+	Mode     string
+	Image    image.Image // populated when Mode == imageMode
+	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
 // is created with an empty buffer that will be written on first save —
 // matching what most editors do when you "open" a brand-new file path.
+// When path looks like an image we recognise (PNG / JPEG / GIF), the tab
+// is opened in read-only image-preview mode instead of as text.
 func NewTab(path string) (*Tab, error) {
+	if path != "" && isImageExt(path) {
+		return newImageTab(path)
+	}
 	var data []byte
 	var mtime time.Time
 	if path != "" {
@@ -94,6 +109,40 @@ func NewTab(path string) (*Tab, error) {
 	return t, nil
 }
 
+// newImageTab decodes path as an image and returns a Tab in image
+// preview mode. The buffer is left empty (image tabs ignore it) but
+// allocated so any code that pokes at t.Buffer doesn't have to nil-check.
+func newImageTab(path string) (*Tab, error) {
+	img, format, err := decodeImageFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var mtime time.Time
+	if info, statErr := os.Stat(path); statErr == nil {
+		mtime = info.ModTime()
+	}
+	t := &Tab{
+		Path:     path,
+		Buffer:   NewBuffer(""),
+		Mtime:    mtime,
+		Mode:     imageMode,
+		Image:    img,
+		ImageFmt: format,
+	}
+	// Capture the empty original snapshot so CanRevert / RevertFile
+	// behave sensibly even though image tabs are read-only — they'll
+	// just always report "nothing to revert".
+	t.initUndo()
+	return t, nil
+}
+
+// IsImage reports whether the tab is an image-preview, not a text editor.
+// Callers use this to skip text-only behaviour (cursor placement, key
+// dispatch, save, etc.) without having to know about Mode strings.
+func (t *Tab) IsImage() bool {
+	return t.Mode == imageMode
+}
+
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
 func (t *Tab) DisplayName() string {
 	if t.Path == "" {
@@ -105,8 +154,12 @@ func (t *Tab) DisplayName() string {
 // Save writes the buffer to disk and clears Dirty. It is an error to call
 // Save on an untitled tab — callers should prompt for a path first. Mtime
 // is refreshed so the disk-reconcile loop doesn't immediately think the
-// file we just wrote was changed by someone else.
+// file we just wrote was changed by someone else. Image tabs return an
+// error since the editor only knows how to read those, not re-encode them.
 func (t *Tab) Save() error {
+	if t.IsImage() {
+		return fmt.Errorf("image tabs are read-only")
+	}
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
 	}
@@ -129,10 +182,26 @@ func (t *Tab) Save() error {
 // are clamped to the new content (so the user keeps roughly their place
 // instead of getting snapped to line 0); ScrollY is left alone and gets
 // clamped on the next render. Dirty is cleared and the syntax cache is
-// invalidated.
+// invalidated. Image tabs decode the file again instead of replacing
+// the text buffer.
 func (t *Tab) Reload() error {
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
+	}
+	if t.IsImage() {
+		img, format, err := decodeImageFile(t.Path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(t.Path)
+		if err != nil {
+			return err
+		}
+		t.Image = img
+		t.ImageFmt = format
+		t.Mtime = info.ModTime()
+		t.DiskGone = false
+		return nil
 	}
 	data, err := os.ReadFile(t.Path)
 	if err != nil {
@@ -175,7 +244,7 @@ func (t *Tab) SelectionText() string {
 // DeleteSelection removes the selected range and collapses the cursor to the
 // start of the selection. A no-op when nothing is selected.
 func (t *Tab) DeleteSelection() {
-	if !t.HasSelection() {
+	if t.IsImage() || !t.HasSelection() {
 		return
 	}
 	// Selection deletes are always their own undo step — they can wipe
@@ -194,8 +263,11 @@ func (t *Tab) DeleteSelection() {
 // InsertString inserts s at the cursor (replacing any selection first) and
 // advances the cursor past the inserted text. Always recorded as a
 // structural undo step — pasted text or "\n" presses shouldn't merge
-// with the surrounding typing burst.
+// with the surrounding typing burst. No-op on image tabs.
 func (t *Tab) InsertString(s string) {
+	if t.IsImage() {
+		return
+	}
 	if t.HasSelection() {
 		// DeleteSelection records its own structural step. Don't push a
 		// second one here or the user would have to undo twice to get
@@ -213,8 +285,12 @@ func (t *Tab) InsertString(s string) {
 
 // InsertRune inserts a single typed character at the cursor. Coalesces
 // with adjacent runes inside the undo window so a typed word collapses
-// into a single undo step rather than one entry per keystroke.
+// into a single undo step rather than one entry per keystroke. No-op
+// on image tabs.
 func (t *Tab) InsertRune(r rune) {
+	if t.IsImage() {
+		return
+	}
 	if t.HasSelection() {
 		// First-rune-after-selection: let DeleteSelection capture the
 		// pre-state, then run the insert without a second push.
@@ -230,8 +306,12 @@ func (t *Tab) InsertRune(r rune) {
 }
 
 // Backspace deletes the character before the cursor (or the selection if any).
-// Coalesces with adjacent backspaces inside the undo window.
+// Coalesces with adjacent backspaces inside the undo window. No-op on
+// image tabs.
 func (t *Tab) Backspace() {
+	if t.IsImage() {
+		return
+	}
 	if t.HasSelection() {
 		t.DeleteSelection()
 		return
@@ -255,8 +335,12 @@ func (t *Tab) Backspace() {
 }
 
 // Delete removes the character after the cursor (or the selection if any).
-// Coalesces with adjacent forward-deletes inside the undo window.
+// Coalesces with adjacent forward-deletes inside the undo window. No-op
+// on image tabs.
 func (t *Tab) Delete() {
+	if t.IsImage() {
+		return
+	}
 	if t.HasSelection() {
 		t.DeleteSelection()
 		return
@@ -399,7 +483,12 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 
 // Render draws the editor's content (line numbers, code with syntax
 // highlighting, selection, cursor) into the rectangle (x, y, w, h).
+// Image tabs delegate to renderImage instead of drawing text.
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+	if t.IsImage() {
+		t.renderImage(scr, th, x, y, w, h)
+		return
+	}
 	if t.StyleStale {
 		t.Styles = Highlight(t.Path, t.Buffer.String(), th)
 		t.StyleStale = false
