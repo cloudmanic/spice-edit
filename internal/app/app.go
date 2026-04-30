@@ -40,7 +40,7 @@ const (
 	minSidebarWidth     = 18
 	minEditorAfterDrag  = 40
 	minWidth            = 50
-	minHeight           = 20
+	minHeight           = 24
 	statusFlashFor = 3 * time.Second
 	doubleClickMs  = 500 * time.Millisecond
 	doubleEscMs    = 500 * time.Millisecond
@@ -61,7 +61,7 @@ const (
 	// ("Save & close tab") plus chevron and padding; height is fixed by
 	// the layout below.
 	modalWidth  = 38
-	modalHeight = 19
+	modalHeight = 23
 
 	// autoScrollTick is how often the auto-scroll goroutine emits a tick
 	// while the user is drag-selecting with the cursor parked outside the
@@ -128,27 +128,31 @@ type menuItemDef struct {
 // Layout (mirrored by the divider list in drawMenu):
 //
 //	  3,4,5     Tab actions    — Save, Save & close, Close
-//	  7,8,9     File actions   — New, Rename, Delete (current/active folder)
-//	  11,12,13  Clipboard      — Copy, Cut, Paste
-//	  15        View toggle    — Show / Hide file explorer
-//	  17        Quit
+//	  7,8,9     History        — Undo, Redo, Revert file
+//	  11,12,13  File actions   — New, Rename, Delete (current/active folder)
+//	  15,16,17  Clipboard      — Copy, Cut, Paste
+//	  19        View toggle    — Show / Hide file explorer
+//	  21        Quit
 var menuItems = []menuItemDef{
 	{label: "Save", relY: 3, action: (*App).menuSave, enabled: (*App).hasSavableTab},
 	{label: "Save & close tab", relY: 4, action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
 	{label: "Close tab", relY: 5, action: (*App).menuClose, enabled: (*App).hasTab},
-	{relY: 7, action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
-	{label: "Rename file", relY: 8, action: (*App).menuRename, enabled: (*App).hasSavableTab},
-	{label: "Delete file", relY: 9, action: (*App).menuDelete, enabled: (*App).hasSavableTab},
-	{label: "Copy selection", relY: 11, action: (*App).menuCopy, enabled: (*App).hasSelection},
-	{label: "Cut selection", relY: 12, action: (*App).menuCut, enabled: (*App).hasSelection},
-	{label: "Paste", relY: 13, action: (*App).menuPaste, enabled: (*App).hasClipboard},
-	{relY: 15, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
+	{label: "Undo", relY: 7, action: (*App).menuUndo, enabled: (*App).hasUndo},
+	{label: "Redo", relY: 8, action: (*App).menuRedo, enabled: (*App).hasRedo},
+	{label: "Revert file", relY: 9, action: (*App).menuRevert, enabled: (*App).hasRevert},
+	{relY: 11, action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+	{label: "Rename file", relY: 12, action: (*App).menuRename, enabled: (*App).hasSavableTab},
+	{label: "Delete file", relY: 13, action: (*App).menuDelete, enabled: (*App).hasSavableTab},
+	{label: "Copy selection", relY: 15, action: (*App).menuCopy, enabled: (*App).hasSelection},
+	{label: "Cut selection", relY: 16, action: (*App).menuCut, enabled: (*App).hasSelection},
+	{label: "Paste", relY: 17, action: (*App).menuPaste, enabled: (*App).hasClipboard},
+	{relY: 19, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
 	// Manual tree refresh — disabled in favour of the 10s background poller,
 	// but menuRefreshTree below stays so we can re-add the row later by
 	// picking a free relY (and adjusting modalHeight + dividers if you
 	// want it in its own group).
 	// {label: "Refresh tree", relY: ?, action: (*App).menuRefreshTree, enabled: alwaysTrue},
-	{label: "Quit editor", relY: 17, action: (*App).menuQuit, enabled: alwaysTrue},
+	{label: "Quit editor", relY: 21, action: (*App).menuQuit, enabled: alwaysTrue},
 }
 
 // alwaysTrue is the default predicate for actions that are always applicable
@@ -1258,6 +1262,67 @@ func (a *App) hasSelection() bool {
 // to paste.
 func (a *App) hasClipboard() bool { return a.clipBuf != "" }
 
+// hasUndo reports whether the active tab has anything to undo. Used to
+// enable / disable the Undo row in the action menu.
+func (a *App) hasUndo() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.CanUndo()
+}
+
+// hasRedo reports whether the active tab has anything to redo.
+func (a *App) hasRedo() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.CanRedo()
+}
+
+// hasRevert reports whether the active tab differs from its on-open
+// (or last-reload) baseline — i.e. there is something to revert.
+func (a *App) hasRevert() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.CanRevert()
+}
+
+// menuUndo rolls the active tab back one undo step.
+func (a *App) menuUndo() {
+	a.closeMenu()
+	t := a.activeTabPtr()
+	if t == nil {
+		return
+	}
+	if !t.Undo() {
+		a.flash("Nothing to undo")
+	}
+}
+
+// menuRedo re-applies the most recently undone step.
+func (a *App) menuRedo() {
+	a.closeMenu()
+	t := a.activeTabPtr()
+	if t == nil {
+		return
+	}
+	if !t.Redo() {
+		a.flash("Nothing to redo")
+	}
+}
+
+// menuRevert rewinds the active tab all the way back to the buffer
+// state we captured the moment the file was opened (or last reloaded).
+// The pre-revert state goes onto the undo stack so an accidental click
+// is recoverable with one Undo.
+func (a *App) menuRevert() {
+	a.closeMenu()
+	t := a.activeTabPtr()
+	if t == nil {
+		return
+	}
+	if !t.RevertFile() {
+		a.flash("File matches its on-open state — nothing to revert")
+		return
+	}
+	a.flash("Reverted to on-open state — Undo to recover")
+}
+
 // menuSave runs the Save action and dismisses the menu.
 func (a *App) menuSave() {
 	a.closeMenu()
@@ -1617,7 +1682,7 @@ func (a *App) drawMenu() {
 
 	// Horizontal dividers between action groups. See menuItems above for
 	// the matching row layout.
-	for _, dy := range []int{2, 6, 10, 14, 16} {
+	for _, dy := range []int{2, 6, 10, 14, 18, 20} {
 		cy := my + dy
 		a.screen.SetContent(mx, cy, '├', nil, borderStyle)
 		a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)

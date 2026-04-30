@@ -540,29 +540,39 @@ func TestMenuMoveSelection_WrapsAroundEnds(t *testing.T) {
 	tab.Cursor = editor.Position{Line: 0, Col: 1}
 	a.clipBuf = "x"
 
-	// Walk forward through every menu item.
-	a.hoveredMenuRow = -1
-	first := -1
-	for i := 0; i < len(menuItems); i++ {
-		a.menuMoveSelection(1)
-		if first == -1 {
-			first = a.hoveredMenuRow
+	// Count the rows currently enabled so we know how many forward
+	// steps land us back at the starting row (vs going past it). A
+	// hard-coded len(menuItems) breaks every time the menu grows.
+	enabled := 0
+	for _, item := range menuItems {
+		if item.enabled(a) {
+			enabled++
 		}
 	}
-	// Step once more — we should wrap back to the first item.
+	if enabled < 2 {
+		t.Fatalf("need at least 2 enabled items to test wrap; got %d", enabled)
+	}
+
+	// Walk forward exactly `enabled` steps and land on the first row.
+	a.hoveredMenuRow = -1
 	a.menuMoveSelection(1)
+	first := a.hoveredMenuRow
+	for i := 1; i < enabled; i++ {
+		a.menuMoveSelection(1)
+	}
+	a.menuMoveSelection(1) // wrap
 	if a.hoveredMenuRow != first {
 		t.Fatalf("forward wrap: got %d, want %d", a.hoveredMenuRow, first)
 	}
 
-	// Walk backward.
+	// Same for backward.
 	a.hoveredMenuRow = -1
 	a.menuMoveSelection(-1)
 	last := a.hoveredMenuRow
-	for i := 1; i < len(menuItems); i++ {
+	for i := 1; i < enabled; i++ {
 		a.menuMoveSelection(-1)
 	}
-	a.menuMoveSelection(-1)
+	a.menuMoveSelection(-1) // wrap
 	if a.hoveredMenuRow != last {
 		t.Fatalf("backward wrap: got %d, want %d", a.hoveredMenuRow, last)
 	}
@@ -818,6 +828,84 @@ func TestMenuClickPaths(t *testing.T) {
 	}
 }
 
+// TestUndoRedoRevert_MenuPaths exercises the new history actions end
+// to end through the menu wrappers. The flash on no-op paths is also
+// covered so the user always gets feedback when they hit a dead-end.
+func TestUndoRedoRevert_MenuPaths(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "edit.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+
+	// Nothing to undo / redo / revert on a freshly opened file.
+	if a.hasUndo() || a.hasRedo() || a.hasRevert() {
+		t.Fatal("freshly opened tab should have no history")
+	}
+	a.menuOpen = true
+	a.menuUndo()
+	a.menuOpen = true
+	a.menuRedo()
+	a.menuOpen = true
+	a.menuRevert()
+
+	// One edit → undo + revert become available.
+	tab.MoveCursorTo(editor.Position{Line: 0, Col: 4}, false)
+	tab.InsertString("X")
+	if !a.hasUndo() || !a.hasRevert() {
+		t.Fatal("expected undo + revert after edit")
+	}
+	if a.hasRedo() {
+		t.Fatal("redo should still be empty")
+	}
+
+	a.menuOpen = true
+	a.menuUndo()
+	if got := tab.Buffer.String(); got != "seed" {
+		t.Fatalf("after menuUndo = %q, want seed", got)
+	}
+	if !a.hasRedo() {
+		t.Fatal("redo should be populated after an undo")
+	}
+
+	a.menuOpen = true
+	a.menuRedo()
+	if got := tab.Buffer.String(); got != "seedX" {
+		t.Fatalf("after menuRedo = %q, want seedX", got)
+	}
+
+	// Revert back to original; then Undo must recover the post-edit state.
+	a.menuOpen = true
+	a.menuRevert()
+	if got := tab.Buffer.String(); got != "seed" {
+		t.Fatalf("after menuRevert = %q, want seed", got)
+	}
+	a.menuOpen = true
+	a.menuUndo()
+	if got := tab.Buffer.String(); got != "seedX" {
+		t.Fatalf("after undo-of-revert = %q, want seedX", got)
+	}
+}
+
+// TestUndoRedoRevert_NoTabSafelyNoOps guards against crashes when the
+// menu rows somehow fire with no active tab — they should silently
+// return rather than dereferencing nil.
+func TestUndoRedoRevert_NoTabSafelyNoOps(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.menuOpen = true
+	a.menuUndo()
+	a.menuOpen = true
+	a.menuRedo()
+	a.menuOpen = true
+	a.menuRevert()
+	if a.hasUndo() || a.hasRedo() || a.hasRevert() {
+		t.Fatal("no-tab predicates should all be false")
+	}
+}
+
 // TestMenuClose_NoTab safely no-ops.
 func TestMenuClose_NoTab(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
@@ -832,7 +920,7 @@ func TestMenuActivate_RunsHovered(t *testing.T) {
 	a.openMenu()
 	// Force highlight onto the toggle row (always enabled), then activate.
 	for i, item := range menuItems {
-		if item.labelFor != nil && item.label == "" && item.relY == 15 {
+		if item.labelFor != nil && item.label == "" && item.relY == 19 {
 			a.hoveredMenuRow = i
 			break
 		}
@@ -1145,9 +1233,9 @@ func TestHandleMenuMouse_ClicksRowAndOutside(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openMenu()
 	mx, my, _, _ := a.menuModalRect()
-	// Click on the toggle row (relY=15) — flips the sidebar.
+	// Click on the toggle row (relY=19) — flips the sidebar.
 	before := a.sidebarShown
-	a.handleMenuMouse(mx+5, my+15, tcell.Button1)
+	a.handleMenuMouse(mx+5, my+19, tcell.Button1)
 	if a.sidebarShown == before {
 		t.Fatal("expected toggle to fire")
 	}
