@@ -80,6 +80,13 @@ type Tab struct {
 	FindQuery   string
 	FindMatches []Match
 	FindIndex   int // -1 = no current match; otherwise an index into FindMatches.
+
+	// IndentUnit is the string the editor inserts when the user presses
+	// Tab. Detected on file open (DetectIndent) so the editor matches
+	// whatever the file already does — a tab-indented Go file gets a
+	// real tab; a 2-space-indented file gets two spaces. Mixed-style
+	// files take the dominant signal.
+	IndentUnit string
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
@@ -112,6 +119,7 @@ func NewTab(path string) (*Tab, error) {
 		StyleStale: true,
 		Mtime:      mtime,
 	}
+	t.IndentUnit = DetectIndent(t.Buffer.Lines, path)
 	// Record the on-open buffer state so RevertFile has somewhere to
 	// rewind to even after the user has typed away.
 	t.initUndo()
@@ -562,46 +570,73 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 
 		// Line content, with syntax styles, selection bg, and line bg.
+		// We walk from the start of the line so tab stops anchor to col 0
+		// — a tab one cell into the line still expands to the next stop,
+		// not the next-stop-from-the-scroll-offset. ScrollX skips runes;
+		// the visual column we paint at is rune-walked from there.
 		runes := []rune(t.Buffer.Lines[lineIdx])
 		var styles []tcell.Style
 		if lineIdx < len(t.Styles) {
 			styles = t.Styles[lineIdx]
 		}
-		for col := 0; col < contentW; col++ {
-			srcCol := t.ScrollX + col
-			if srcCol >= len(runes) {
-				break
-			}
-			r := runes[srcCol]
-			st := bgStyle
-			if srcCol < len(styles) {
-				st = styles[srcCol]
-			}
-			st = st.Background(lineBg)
-			if hasSel {
-				p := Position{Line: lineIdx, Col: srcCol}
-				if !PosLess(p, selStart) && PosLess(p, selEnd) {
-					st = st.Background(th.Selection)
+		scrollVisual := LineVisualCol(runes, t.ScrollX)
+		visualCol := 0 // visual cell offset from the start of the LINE
+		for runeIdx, r := range runes {
+			width := RuneVisualWidth(r, visualCol)
+			if runeIdx >= t.ScrollX {
+				// Once we're past ScrollX, paint each cell of this rune.
+				// The rune's first cell shows the actual glyph (or ' '
+				// for tabs); padding cells for a multi-cell tab show a
+				// space so the trailing tab area still gets the right bg.
+				st := bgStyle
+				if runeIdx < len(styles) {
+					st = styles[runeIdx]
+				}
+				st = st.Background(lineBg)
+				if hasSel {
+					p := Position{Line: lineIdx, Col: runeIdx}
+					if !PosLess(p, selStart) && PosLess(p, selEnd) {
+						st = st.Background(th.Selection)
+					}
+				}
+				if mIdx := t.matchAtRune(lineIdx, runeIdx); mIdx >= 0 {
+					if mIdx == t.FindIndex {
+						st = st.Background(th.FindCurrent).Foreground(th.BG)
+					} else {
+						st = st.Background(th.FindMatch)
+					}
+				}
+				glyph := r
+				if r == '\t' {
+					glyph = ' '
+				}
+				for cell := 0; cell < width; cell++ {
+					sc := visualCol - scrollVisual + cell
+					if sc < 0 {
+						continue
+					}
+					if sc >= contentW {
+						break
+					}
+					ch := glyph
+					if cell > 0 {
+						ch = ' '
+					}
+					scr.SetContent(contentX+sc, cy, ch, nil, st)
 				}
 			}
-			// Find-match highlight. Painted *after* selection so an
-			// active find on top of a stale selection still reads
-			// clearly. The "current" match (FindIndex) gets a louder
-			// color so the user can pick it out at a glance.
-			if mIdx := t.matchAtRune(lineIdx, srcCol); mIdx >= 0 {
-				if mIdx == t.FindIndex {
-					st = st.Background(th.FindCurrent).Foreground(th.BG)
-				} else {
-					st = st.Background(th.FindMatch)
-				}
-			}
-			scr.SetContent(contentX+col, cy, r, nil, st)
+			visualCol += width
 		}
 	}
 
-	// Position the hardware cursor at the buffer cursor's screen coordinates.
+	// Position the hardware cursor at its visual column (so a cursor
+	// past a tab lands at the tab's *end* cell, not just rune-Col cells
+	// to the right of ScrollX).
 	cy := y + (t.Cursor.Line - t.ScrollY)
-	cx := contentX + (t.Cursor.Col - t.ScrollX)
+	cursorRunes := t.Buffer.LineRunes(t.Cursor.Line)
+	cursorVisual := LineVisualCol(cursorRunes, t.Cursor.Col)
+	scrollVisual := LineVisualCol(cursorRunes, t.ScrollX)
+	cx := contentX + (cursorVisual - scrollVisual)
 	if cy >= y && cy < y+h && cx >= contentX && cx < contentX+contentW {
 		scr.ShowCursor(cx, cy)
 	} else {
@@ -624,8 +659,13 @@ func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
 		// Click in the gutter — treat as click at column 0 of that line.
 		return Position{Line: line, Col: 0}, true
 	}
-	col := t.ScrollX + (localX - contentX)
 	runes := []rune(t.Buffer.Lines[line])
+	// Convert the click's screen column back to a rune column. With tabs
+	// expanding to multi-cell tab stops we can't just subtract ScrollX
+	// from localX — we have to walk the runes counting visual cells.
+	scrollVisual := LineVisualCol(runes, t.ScrollX)
+	targetVisual := scrollVisual + (localX - contentX)
+	col := RuneColAtVisual(runes, targetVisual)
 	if col > len(runes) {
 		col = len(runes)
 	}

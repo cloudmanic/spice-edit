@@ -806,6 +806,91 @@ func TestTab_HitTest_ClampsColumnAtLineEnd(t *testing.T) {
 	}
 }
 
+// TestTab_Render_ExpandsTabsToTabStops confirms that a real \t in the
+// buffer paints across multiple cells until the next 4-cell tab stop.
+// Without this, the cell directly after a tab character would read as
+// ' ' (not 'a'), and indented lines wouldn't line up with each other.
+func TestTab_Render_ExpandsTabsToTabStops(t *testing.T) {
+	scr := newSimScreen(t, 40, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("\tabc")
+	tab.Cursor = Position{Line: 0, Col: 0}
+	tab.Anchor = tab.Cursor
+
+	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	cellRune := func(col int) rune {
+		c := cells[col]
+		if len(c.Runes) == 0 {
+			return ' '
+		}
+		return c.Runes[0]
+	}
+	// Content starts at col gutterWidth+1. The tab fills 4 cells, so
+	// 'a' lands at content+4, 'b' at +5, 'c' at +6.
+	contentCol := gutterWidth + 1
+	if w < contentCol+7 {
+		t.Fatalf("simulated screen too narrow: w=%d", w)
+	}
+	if got := cellRune(contentCol + 4); got != 'a' {
+		t.Errorf("expected 'a' at content+4, got %q", got)
+	}
+	if got := cellRune(contentCol + 5); got != 'b' {
+		t.Errorf("expected 'b' at content+5, got %q", got)
+	}
+	if got := cellRune(contentCol + 6); got != 'c' {
+		t.Errorf("expected 'c' at content+6, got %q", got)
+	}
+}
+
+// TestTab_HitTest_InsideTabSnapsToTab proves a click anywhere inside a
+// tab's 4-cell visual span returns the tab's rune column. Without this,
+// clicks would silently land on phantom positions where there's nothing
+// to edit.
+func TestTab_HitTest_InsideTabSnapsToTab(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("\tx")
+
+	contentX := gutterWidth + 1
+	for offset := 0; offset < 4; offset++ {
+		pos, ok := tab.HitTest(contentX+offset, 0, 40, 10)
+		if !ok {
+			t.Fatalf("HitTest offset %d returned !ok", offset)
+		}
+		if pos.Col != 0 {
+			t.Errorf("offset %d: col = %d, want 0 (the tab)", offset, pos.Col)
+		}
+	}
+	// Cell 4 is the first cell of 'x' — should land on rune 1.
+	pos, _ := tab.HitTest(contentX+4, 0, 40, 10)
+	if pos.Col != 1 {
+		t.Errorf("cell after tab: col = %d, want 1", pos.Col)
+	}
+}
+
+// TestTab_NewTab_DetectsIndent ties the editor.Tab type to the
+// indent-detection step so opening a tab-indented file makes Tab key
+// inserts use a real tab. Pinned at this layer so a future refactor
+// can't accidentally drop the call without a test failing.
+func TestTab_NewTab_DetectsIndent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "x.go")
+	if err := os.WriteFile(target, []byte("package x\n\nfunc x() {\n\treturn 1\n}\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(target)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	if tab.IndentUnit != "\t" {
+		t.Fatalf("expected tab IndentUnit, got %q", tab.IndentUnit)
+	}
+}
+
 // TestTab_clampScroll_BoundsScroll exercises clampScroll via Render: when
 // ScrollY is set absurdly high, clampScroll caps it so the file stays
 // visible.
