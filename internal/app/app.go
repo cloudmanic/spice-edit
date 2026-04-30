@@ -20,6 +20,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/clipboard"
+	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
 	"github.com/cloudmanic/spice-edit/internal/theme"
@@ -57,11 +59,12 @@ const (
 	// of the tab bar. Tabs render starting just after it.
 	menuButtonWidth = 4
 
-	// Modal geometry. Width comfortably fits the longest action label
-	// ("Save & close tab") plus chevron and padding; height is fixed by
-	// the layout below.
-	modalWidth  = 38
-	modalHeight = 23
+	// modalWidth is the action modal's column count. Sized to comfortably
+	// fit the longest built-in label ("Save & close tab") plus chevron and
+	// padding; very long custom-action labels will clip but won't break
+	// layout. Height is computed dynamically from the visible groups —
+	// see menuLayout.
+	modalWidth = 38
 
 	// autoScrollTick is how often the auto-scroll goroutine emits a tick
 	// while the user is drag-selecting with the cursor parked outside the
@@ -89,6 +92,19 @@ type treeRefreshEvent struct {
 
 // When satisfies the tcell.Event interface.
 func (e *treeRefreshEvent) When() time.Time { return e.when }
+
+// customActionDoneEvent is posted by runCustomAction when its background
+// shell-out finishes. Carries the label and any error so the main loop
+// can flash a sensible status message — running scp / ssh inline would
+// freeze the UI for the duration of the network round-trip.
+type customActionDoneEvent struct {
+	when  time.Time
+	label string
+	err   error
+}
+
+// When satisfies the tcell.Event interface.
+func (e *customActionDoneEvent) When() time.Time { return e.when }
 
 // tabRect remembers where each tab was drawn so click handling can hit-test
 // against the actual rendered geometry rather than re-deriving it.
@@ -121,43 +137,96 @@ type menuItemDef struct {
 	labelFor func(*App) string
 }
 
-// menuItems is the full list of menu actions, in display order. Their relY
-// fields are absolute row offsets inside the modal — see drawMenu for the
-// surrounding box drawing.
+// builtinMenuGroups returns the editor's built-in action groups in
+// display order. Custom actions loaded from
+// ~/.config/spiceedit/actions.json get prepended as their own group
+// in menuLayout — they're not included here so toggling them on or
+// off doesn't require touching this table.
 //
-// Layout (mirrored by the divider list in drawMenu):
-//
-//	  3,4,5     Tab actions    — Save, Save & close, Close
-//	  7,8,9     History        — Undo, Redo, Revert file
-//	  11,12,13  File actions   — New, Rename, Delete (current/active folder)
-//	  15,16,17  Clipboard      — Copy, Cut, Paste
-//	  19        View toggle    — Show / Hide file explorer
-//	  21        Quit
-var menuItems = []menuItemDef{
-	{label: "Save", relY: 3, action: (*App).menuSave, enabled: (*App).hasSavableTab},
-	{label: "Save & close tab", relY: 4, action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
-	{label: "Close tab", relY: 5, action: (*App).menuClose, enabled: (*App).hasTab},
-	{label: "Undo", relY: 7, action: (*App).menuUndo, enabled: (*App).hasUndo},
-	{label: "Redo", relY: 8, action: (*App).menuRedo, enabled: (*App).hasRedo},
-	{label: "Revert file", relY: 9, action: (*App).menuRevert, enabled: (*App).hasRevert},
-	{relY: 11, action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
-	{label: "Rename file", relY: 12, action: (*App).menuRename, enabled: (*App).hasFileTab},
-	{label: "Delete file", relY: 13, action: (*App).menuDelete, enabled: (*App).hasFileTab},
-	{label: "Copy selection", relY: 15, action: (*App).menuCopy, enabled: (*App).hasSelection},
-	{label: "Cut selection", relY: 16, action: (*App).menuCut, enabled: (*App).hasSelection},
-	{label: "Paste", relY: 17, action: (*App).menuPaste, enabled: (*App).hasClipboard},
-	{relY: 19, action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
-	// Manual tree refresh — disabled in favour of the 10s background poller,
-	// but menuRefreshTree below stays so we can re-add the row later by
-	// picking a free relY (and adjusting modalHeight + dividers if you
-	// want it in its own group).
-	// {label: "Refresh tree", relY: ?, action: (*App).menuRefreshTree, enabled: alwaysTrue},
-	{label: "Quit editor", relY: 21, action: (*App).menuQuit, enabled: alwaysTrue},
+// Each group is rendered as a contiguous block; menuLayout interleaves
+// dividers between groups and recomputes every relY. The relY field is
+// left zero here on purpose — it gets stamped at layout time.
+func builtinMenuGroups() [][]menuItemDef {
+	return [][]menuItemDef{
+		// Tab actions
+		{
+			{label: "Save", action: (*App).menuSave, enabled: (*App).hasSavableTab},
+			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
+			{label: "Close tab", action: (*App).menuClose, enabled: (*App).hasTab},
+		},
+		// History
+		{
+			{label: "Undo", action: (*App).menuUndo, enabled: (*App).hasUndo},
+			{label: "Redo", action: (*App).menuRedo, enabled: (*App).hasRedo},
+			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
+		},
+		// File actions
+		{
+			{action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
+			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
+		},
+		// Clipboard
+		{
+			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
+			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
+			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
+		},
+		// View toggle
+		{
+			{action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
+		},
+		// Quit
+		{
+			{label: "Quit editor", action: (*App).menuQuit, enabled: alwaysTrue},
+		},
+	}
 }
 
 // alwaysTrue is the default predicate for actions that are always applicable
 // (currently just Quit — which has no preconditions).
 func alwaysTrue(*App) bool { return true }
+
+// menuLayout flattens the visible menu groups into a single ordered
+// slice of items with relY positions assigned, plus the divider rows
+// and the modal's total cell height. Custom actions (when configured)
+// are prepended as their own group so they read like first-class menu
+// rows. Recomputed on every call — cheap, and lets the layout react
+// when actions.json is reloaded mid-session.
+func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int) {
+	groups := [][]menuItemDef{}
+	if len(a.customActions) > 0 {
+		ca := make([]menuItemDef, 0, len(a.customActions))
+		for i := range a.customActions {
+			i := i // capture
+			ca = append(ca, menuItemDef{
+				label:   a.customActions[i].Label,
+				action:  func(app *App) { app.runCustomAction(i) },
+				enabled: (*App).hasFileTab,
+			})
+		}
+		groups = append(groups, ca)
+	}
+	groups = append(groups, builtinMenuGroups()...)
+
+	// Title at relY 1, divider under it at relY 2, first item at relY 3.
+	dividers = []int{2}
+	y := 3
+	for gi, g := range groups {
+		for _, it := range g {
+			it.relY = y
+			items = append(items, it)
+			y++
+		}
+		if gi < len(groups)-1 {
+			dividers = append(dividers, y)
+			y++
+		}
+	}
+	// y now points at the bottom border row; height is one beyond.
+	modalHeight = y + 1
+	return items, dividers, modalHeight
+}
 
 // App is the editor's top-level state holder and event-loop owner.
 type App struct {
@@ -243,6 +312,12 @@ type App struct {
 	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
 	gitBranch string
 
+	// customActions is the list of user-configured shell-out actions
+	// loaded from ~/.config/spiceedit/actions.json at startup. When
+	// non-empty they prepend a new group to the action menu — see
+	// menuLayout. nil / empty when the user hasn't configured any.
+	customActions []customactions.Action
+
 	quit bool
 }
 
@@ -280,9 +355,25 @@ func New(rootDir string) (*App, error) {
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.refreshGitStatus()
+	a.loadCustomActions()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
 	return a, nil
+}
+
+// loadCustomActions reads the user's actions.json (if any) and stores
+// the parsed list on the App. Failures are surfaced as a status flash
+// so a typo in the config file isn't silently swallowed, but they
+// don't block startup — the editor still opens with no custom actions
+// in the menu.
+func (a *App) loadCustomActions() {
+	path := customactions.DefaultPath()
+	actions, err := customactions.Load(path)
+	if err != nil {
+		a.flash("custom actions: " + err.Error())
+		return
+	}
+	a.customActions = actions
 }
 
 // refreshGitStatus re-runs `git status --porcelain` against the project
@@ -383,7 +474,20 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.tree.Refresh()
 		a.reconcileOpenTabsWithDisk()
 		a.refreshGitStatus()
+	case *customActionDoneEvent:
+		a.handleCustomActionDone(e)
 	}
+}
+
+// handleCustomActionDone surfaces the result of an async custom-action
+// run. Success flashes a brief confirmation; failure flashes the error
+// (truncated to a status-bar-friendly length).
+func (a *App) handleCustomActionDone(e *customActionDoneEvent) {
+	if e.err != nil {
+		a.flash(fmt.Sprintf("%s failed: %v", e.label, e.err))
+		return
+	}
+	a.flash(e.label + " — done")
 }
 
 // reconcileOpenTabsWithDisk runs once per background tick. For every
@@ -526,10 +630,11 @@ func (a *App) menuButtonRect() (x, y, w, h int) {
 }
 
 // menuModalRect returns the on-screen rectangle of the action modal,
-// centered in the window. Used both for drawing and for hit-testing.
+// centered in the window. Height is derived from the current layout
+// so adding custom actions grows the modal automatically.
 func (a *App) menuModalRect() (x, y, w, h int) {
 	w = modalWidth
-	h = modalHeight
+	_, _, h = a.menuLayout()
 	x = (a.width - w) / 2
 	y = (a.height - h) / 2
 	if x < 0 {
@@ -759,7 +864,8 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 		return
 	}
 	relY := y - my
-	for _, item := range menuItems {
+	items, _, _ := a.menuLayout()
+	for _, item := range items {
 		if item.relY != relY {
 			continue
 		}
@@ -1195,7 +1301,8 @@ func (a *App) openMenu() {
 // list feels continuous. Disabled items and dividers are skipped. If no
 // item is currently enabled hoveredMenuRow stays -1.
 func (a *App) menuMoveSelection(dir int) {
-	n := len(menuItems)
+	items, _, _ := a.menuLayout()
+	n := len(items)
 	if n == 0 {
 		return
 	}
@@ -1212,7 +1319,7 @@ func (a *App) menuMoveSelection(dir int) {
 	}
 	for i := 1; i <= n; i++ {
 		idx := ((start+dir*i)%n + n) % n
-		if menuItems[idx].enabled(a) {
+		if items[idx].enabled(a) {
 			a.hoveredMenuRow = idx
 			return
 		}
@@ -1223,10 +1330,11 @@ func (a *App) menuMoveSelection(dir int) {
 // menuActivate runs the currently-highlighted menu item, if any. It's the
 // keyboard-Enter equivalent of clicking a row.
 func (a *App) menuActivate() {
-	if a.hoveredMenuRow < 0 || a.hoveredMenuRow >= len(menuItems) {
+	items, _, _ := a.menuLayout()
+	if a.hoveredMenuRow < 0 || a.hoveredMenuRow >= len(items) {
 		return
 	}
-	item := menuItems[a.hoveredMenuRow]
+	item := items[a.hoveredMenuRow]
 	if !item.enabled(a) {
 		return
 	}
@@ -1249,7 +1357,8 @@ func (a *App) updateMenuHover(x, y int) {
 		return
 	}
 	relY := y - my
-	for i, item := range menuItems {
+	items, _, _ := a.menuLayout()
+	for i, item := range items {
 		if item.relY == relY && item.enabled(a) {
 			a.hoveredMenuRow = i
 			return
@@ -1345,6 +1454,57 @@ func (a *App) menuRevert() {
 		return
 	}
 	a.flash("Reverted to on-open state — Undo to recover")
+}
+
+// runCustomAction executes the custom action at idx against the active
+// tab's file. The shell command is run via `sh -c` in a goroutine with
+// FILE (absolute path) and FILENAME (basename) exported into the
+// environment, so a slow scp or hanging ssh can't freeze the UI.
+// Completion fires a customActionDoneEvent which the main loop turns
+// into a status flash.
+func (a *App) runCustomAction(idx int) {
+	a.closeMenu()
+	if idx < 0 || idx >= len(a.customActions) {
+		return
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		a.flash("custom action: no file open")
+		return
+	}
+	act := a.customActions[idx]
+
+	abs, err := filepath.Abs(tab.Path)
+	if err != nil {
+		abs = tab.Path
+	}
+	base := filepath.Base(abs)
+
+	a.flash(act.Label + "…")
+	scr := a.screen
+	go func() {
+		cmd := exec.Command("sh", "-c", act.Command)
+		cmd.Env = append(os.Environ(), "FILE="+abs, "FILENAME="+base)
+		out, runErr := cmd.CombinedOutput()
+		var finalErr error
+		if runErr != nil {
+			// Tack the first line of stderr/stdout onto the error so
+			// the user sees *why* it failed, not just the exit code.
+			preview := strings.TrimSpace(string(out))
+			if i := strings.IndexByte(preview, '\n'); i >= 0 {
+				preview = preview[:i]
+			}
+			if len(preview) > 80 {
+				preview = preview[:80] + "…"
+			}
+			if preview == "" {
+				finalErr = runErr
+			} else {
+				finalErr = fmt.Errorf("%v: %s", runErr, preview)
+			}
+		}
+		_ = scr.PostEvent(&customActionDoneEvent{when: time.Now(), label: act.Label, err: finalErr})
+	}()
 }
 
 // menuSave runs the Save action and dismisses the menu.
@@ -1698,11 +1858,13 @@ func (a *App) drawTooSmall() {
 	a.screen.HideCursor()
 }
 
-// drawMenu renders the action modal centered in the window. Each row in
-// menuItems is drawn at its declared relY; horizontal dividers separate
-// the action groups (file ops / clipboard ops / quit).
+// drawMenu renders the action modal centered in the window. The
+// item / divider / height layout comes from menuLayout so adding
+// custom actions or new built-in groups doesn't require touching this
+// function.
 func (a *App) drawMenu() {
 	mx, my, mw, mh := a.menuModalRect()
+	items, dividers, _ := a.menuLayout()
 
 	bg := a.theme.LineHL
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Text)
@@ -1732,9 +1894,10 @@ func (a *App) drawMenu() {
 		a.screen.SetContent(mx+mw-1, cy, '│', nil, borderStyle)
 	}
 
-	// Horizontal dividers between action groups. See menuItems above for
-	// the matching row layout.
-	for _, dy := range []int{2, 6, 10, 14, 18, 20} {
+	// Horizontal dividers between action groups. The dy list comes from
+	// menuLayout — including the always-on row under the title — so it
+	// stays in sync with whatever rows are actually being drawn.
+	for _, dy := range dividers {
 		cy := my + dy
 		a.screen.SetContent(mx, cy, '├', nil, borderStyle)
 		a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)
@@ -1764,7 +1927,7 @@ func (a *App) drawMenu() {
 	hoverBg := a.theme.Selection
 	hoverStyle := tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.Text).Bold(true)
 	hoverChevStyle := tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.AccentSoft).Bold(true)
-	for i, item := range menuItems {
+	for i, item := range items {
 		cy := my + item.relY
 		enabled := item.enabled(a)
 		hovered := enabled && i == a.hoveredMenuRow

@@ -133,6 +133,94 @@ Then:
 - Click and drag in the editor to select; drag past the top or bottom
   edge to auto-scroll the selection.
 
+## Custom actions (open remote files on your laptop)
+
+SpiceEdit can read user-defined shell-out actions from
+`~/.config/spiceedit/actions.json` and prepend them to the action menu.
+Each action runs against the **currently open file** when you click it.
+
+The use case this was built for: you SSH from your laptop into a remote
+box, edit a file there, and want to *open it on your laptop* — but
+neither Sixel nor the Kitty graphics protocol survive the trip through
+zellij/tmux. The trick is to bypass the terminal entirely and pipe the
+file back over a second SSH connection.
+
+### File location
+
+`~/.config/spiceedit/actions.json` (or `$XDG_CONFIG_HOME/spiceedit/actions.json`
+when set). The file is optional — without it, the menu just shows the
+built-in actions.
+
+### Schema
+
+```json
+{
+  "actions": [
+    {
+      "label": "Open on Rager",
+      "command": "scp \"$FILE\" rager:~/Downloads/ && ssh rager open \"~/Downloads/$FILENAME\""
+    },
+    {
+      "label": "Open on Cascade",
+      "command": "scp \"$FILE\" cascade:~/Downloads/ && ssh cascade open \"~/Downloads/$FILENAME\""
+    }
+  ]
+}
+```
+
+Each entry needs:
+
+- **`label`** — the menu text (kept under ~30 chars; long labels clip
+  inside the modal).
+- **`command`** — handed to `sh -c` with two env variables exported:
+  - `FILE` — absolute path of the active tab's file
+  - `FILENAME` — basename of the same file
+
+The action only enables when there's a file open. Commands run in a
+background goroutine, so a slow `scp` or hanging `ssh` won't freeze
+the editor; success or failure flashes in the status bar when it
+finishes.
+
+### The "open on my laptop" workflow
+
+Both example actions assume `rager` and `cascade` are SSH host aliases
+in the **remote** machine's `~/.ssh/config` that resolve back to your
+laptop. The simplest way to set that up:
+
+1. **On your laptop**, generate (or pick) an SSH key pair you'll
+   dedicate to inbound connections from your remote work box.
+2. **On your laptop**, make sure Remote Login is enabled (System
+   Settings → General → Sharing → Remote Login on macOS) and add the
+   public key to `~/.ssh/authorized_keys`.
+3. **On the remote box**, drop the matching private key into
+   `~/.ssh/id_<name>` and add a host alias:
+
+   ```sshconfig
+   Host rager
+     HostName your-laptop.example.com   # or a Tailscale / mesh hostname
+     User your-mac-username
+     IdentityFile ~/.ssh/id_rager
+   ```
+
+4. Test it by hand from the remote: `ssh rager echo hi`. Once that
+   works, SpiceEdit can drive it the same way.
+
+If your laptop sits behind NAT, point `HostName` at a Tailscale /
+WireGuard / Cloudflare-tunnel address — anywhere the remote can reach
+the laptop directly. The action itself is just `scp` + `ssh`; it
+doesn't care how the network gets there.
+
+### Anything else `sh` can do
+
+The schema is deliberately small. If you can write it on one shell
+line, you can put it in `actions.json`:
+
+```json
+{ "label": "Send to ChatGPT", "command": "cat \"$FILE\" | pbcopy && open https://chat.openai.com/" }
+{ "label": "Lint with eslint", "command": "cd $(dirname \"$FILE\") && eslint \"$FILENAME\"" }
+{ "label": "Run formatter",    "command": "gofmt -w \"$FILE\"" }
+```
+
 ## Project layout
 
 ```
@@ -143,6 +231,7 @@ Then:
 │   ├── editor/               # Buffer, tab, cursor, syntax highlighting
 │   ├── filetree/             # Lazy directory tree with identity-preserving refresh
 │   ├── clipboard/            # OSC 52 clipboard with tmux passthrough
+│   ├── customactions/        # Loader for ~/.config/spiceedit/actions.json
 │   ├── theme/                # Tokyo Night-inspired palette
 │   └── version/              # Single-line version constant
 ├── .github/workflows/        # Auto-release pipeline

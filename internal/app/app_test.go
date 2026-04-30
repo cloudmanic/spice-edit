@@ -23,6 +23,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
 	"github.com/cloudmanic/spice-edit/internal/theme"
@@ -170,10 +171,11 @@ func TestMenuButtonRect(t *testing.T) {
 func TestMenuModalRect_Centered(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	x, y, w, h := a.menuModalRect()
-	if w != modalWidth || h != modalHeight {
-		t.Fatalf("modal size: got (%d,%d)", w, h)
+	_, _, expectedH := a.menuLayout()
+	if w != modalWidth || h != expectedH {
+		t.Fatalf("modal size: got (%d,%d), want (%d,%d)", w, h, modalWidth, expectedH)
 	}
-	if x != (a.width-modalWidth)/2 || y != (a.height-modalHeight)/2 {
+	if x != (a.width-modalWidth)/2 || y != (a.height-expectedH)/2 {
 		t.Fatalf("modal origin off-center: (%d,%d)", x, y)
 	}
 }
@@ -542,9 +544,10 @@ func TestMenuMoveSelection_WrapsAroundEnds(t *testing.T) {
 
 	// Count the rows currently enabled so we know how many forward
 	// steps land us back at the starting row (vs going past it). A
-	// hard-coded len(menuItems) breaks every time the menu grows.
+	// hard-coded len breaks every time the menu grows.
+	items, _, _ := a.menuLayout()
 	enabled := 0
-	for _, item := range menuItems {
+	for _, item := range items {
 		if item.enabled(a) {
 			enabled++
 		}
@@ -591,7 +594,8 @@ func TestMenuMoveSelection_SkipsDisabled(t *testing.T) {
 		t.Fatal("expected a row to land somewhere")
 	}
 	idx := a.hoveredMenuRow
-	if !menuItems[idx].enabled(a) {
+	items, _, _ := a.menuLayout()
+	if !items[idx].enabled(a) {
 		t.Fatalf("landed on disabled row %d", idx)
 	}
 }
@@ -918,15 +922,30 @@ func TestMenuClose_NoTab(t *testing.T) {
 func TestMenuActivate_RunsHovered(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openMenu()
-	// Force highlight onto the toggle row (always enabled), then activate.
-	for i, item := range menuItems {
-		if item.labelFor != nil && item.label == "" && item.relY == 19 {
+	// Force highlight onto the sidebar-toggle row (always enabled, label
+	// supplied dynamically via labelFor), then activate.
+	items, _, _ := a.menuLayout()
+	for i, item := range items {
+		if item.labelFor != nil && item.label == "" && item.action != nil {
+			// labelFor + empty static label is the marker for the toggle
+			// row. The newFile row also uses labelFor, so disambiguate by
+			// flipping the sidebar and checking afterward.
+			a.hoveredMenuRow = i
+			a.menuActivate()
+			a.openMenu()
+		}
+	}
+	// Re-find and run the toggle row via its dynamic label.
+	a.hoveredMenuRow = -1
+	items, _, _ = a.menuLayout()
+	for i, item := range items {
+		if item.labelFor != nil && (item.labelFor(a) == "Show file explorer" || item.labelFor(a) == "Hide file explorer") {
 			a.hoveredMenuRow = i
 			break
 		}
 	}
 	if a.hoveredMenuRow < 0 {
-		t.Fatal("could not find toggle row")
+		t.Fatal("could not find sidebar-toggle row")
 	}
 	before := a.sidebarShown
 	a.menuActivate()
@@ -952,8 +971,9 @@ func TestUpdateMenuHover(t *testing.T) {
 	mx, my, _, _ := a.menuModalRect()
 
 	// Find an always-enabled row and click on its relY.
+	items, _, _ := a.menuLayout()
 	var pickIdx, pickRelY int
-	for i, item := range menuItems {
+	for i, item := range items {
 		if item.enabled(a) {
 			pickIdx = i
 			pickRelY = item.relY
@@ -1356,5 +1376,137 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 		if len(c.Runes) > 0 && c.Runes[0] != ' ' {
 			t.Fatalf("status bar col %d = %v, expected blank tail", x, c.Runes)
 		}
+	}
+}
+
+// TestMenuLayout_NoCustomActions pins down the baseline geometry: with
+// zero custom actions the modal still has six built-in groups and the
+// height matches the previously-hardcoded value of 23. Catches accidental
+// off-by-one regressions when someone tweaks the layout helper.
+func TestMenuLayout_NoCustomActions(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.customActions = nil
+	items, dividers, h := a.menuLayout()
+
+	if h != 23 {
+		t.Errorf("modalHeight = %d, want 23", h)
+	}
+	if got := len(items); got != 14 {
+		t.Errorf("item count = %d, want 14 built-ins", got)
+	}
+	wantDiv := []int{2, 6, 10, 14, 18, 20}
+	if len(dividers) != len(wantDiv) {
+		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
+	}
+	for i, d := range wantDiv {
+		if dividers[i] != d {
+			t.Errorf("dividers[%d] = %d, want %d", i, dividers[i], d)
+		}
+	}
+}
+
+// TestMenuLayout_WithCustomActions checks the prepend-and-divide
+// behaviour: two custom actions add a fresh group, an extra divider,
+// and grow the modal by 3 rows (2 items + 1 divider). The first row
+// is the first custom action.
+func TestMenuLayout_WithCustomActions(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.customActions = []customactions.Action{
+		{Label: "Open on Rager", Command: "echo r"},
+		{Label: "Open on Cascade", Command: "echo c"},
+	}
+	items, dividers, h := a.menuLayout()
+
+	if h != 26 { // 23 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 26", h)
+	}
+	if got := items[0].label; got != "Open on Rager" {
+		t.Errorf("first row label = %q, want %q", got, "Open on Rager")
+	}
+	if items[0].relY != 3 {
+		t.Errorf("first row relY = %d, want 3", items[0].relY)
+	}
+	// The new group's trailing divider must live between the custom
+	// actions and the first built-in group.
+	if dividers[1] != 5 {
+		t.Errorf("custom-group divider = %d, want 5", dividers[1])
+	}
+}
+
+// TestRunCustomAction_NoFileFlashes covers the guard that prevents a
+// user from running an action with no file open — the menu would
+// disable the row in that case, but defence-in-depth here matters
+// because keyboard activation can race the predicate.
+func TestRunCustomAction_NoFileFlashes(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.customActions = []customactions.Action{{Label: "X", Command: "echo hi"}}
+	a.runCustomAction(0)
+	if !strings.Contains(a.statusMsg, "no file open") {
+		t.Fatalf("expected no-file flash, got %q", a.statusMsg)
+	}
+}
+
+// TestRunCustomAction_OutOfRange is a no-op when idx is bogus. Caller
+// should never produce one but the guard keeps a stale layout from
+// crashing the editor.
+func TestRunCustomAction_OutOfRange(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.runCustomAction(0)  // empty list
+	a.runCustomAction(99) // out of range
+}
+
+// TestRunCustomAction_ExecutesAndPostsEvent runs a real `sh -c`
+// command against a small file and confirms that (a) the command
+// observed FILE / FILENAME via env, and (b) a customActionDoneEvent
+// lands on the screen's event queue. The chosen command writes a
+// marker file that lets the test verify env reached the subprocess.
+func TestRunCustomAction_ExecutesAndPostsEvent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "src.txt")
+	if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	marker := filepath.Join(dir, "marker.txt")
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.customActions = []customactions.Action{{
+		Label:   "Mark",
+		Command: `printf "%s|%s" "$FILE" "$FILENAME" > ` + marker,
+	}}
+
+	a.runCustomAction(0)
+
+	// The action runs in a goroutine and posts an event back. Pull
+	// events off the screen's queue until we see the done event, with
+	// a sanity timeout so a regression can't hang the suite forever.
+	deadline := time.Now().Add(2 * time.Second)
+	var done *customActionDoneEvent
+	for time.Now().Before(deadline) && done == nil {
+		ev := a.screen.PollEvent()
+		if ev == nil {
+			break
+		}
+		if d, ok := ev.(*customActionDoneEvent); ok {
+			done = d
+		}
+	}
+	if done == nil {
+		t.Fatal("no customActionDoneEvent received within timeout")
+	}
+	if done.err != nil {
+		t.Fatalf("action errored: %v", done.err)
+	}
+	if done.label != "Mark" {
+		t.Errorf("event label = %q", done.label)
+	}
+
+	// Verify the subprocess saw the env variables we exported.
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker read: %v", err)
+	}
+	want := target + "|" + "src.txt"
+	if string(got) != want {
+		t.Fatalf("marker content = %q, want %q", got, want)
 	}
 }
