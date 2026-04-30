@@ -30,10 +30,13 @@ import (
 // gitStatus is the snapshot of a single git status run. IsRepo distinguishes
 // "not a git repo" (don't bother trying again) from "git error" (we tried
 // and bailed). DirtyFiles holds absolute paths to changed entries; callers
-// should treat absence-of-key as "clean" rather than as "unknown".
+// should treat absence-of-key as "clean" rather than as "unknown". Branch
+// is the human-readable current branch name, or a short SHA when HEAD is
+// detached, or "" when we aren't in a repo.
 type gitStatus struct {
 	IsRepo     bool
 	DirtyFiles map[string]bool
+	Branch     string
 }
 
 // loadGitStatus inspects rootDir and returns the set of dirty file paths
@@ -64,11 +67,34 @@ func loadGitStatus(rootDir string) gitStatus {
 		// We *are* in a repo (rev-parse succeeded) but couldn't read
 		// status. Mark the result as a repo with no known dirty files
 		// so the caller at least knows we tried.
-		return gitStatus{IsRepo: true, DirtyFiles: map[string]bool{}}
+		return gitStatus{IsRepo: true, DirtyFiles: map[string]bool{}, Branch: loadGitBranch(rootDir)}
 	}
 
 	dirty := parsePorcelain(out, toplevel)
-	return gitStatus{IsRepo: true, DirtyFiles: dirty}
+	return gitStatus{IsRepo: true, DirtyFiles: dirty, Branch: loadGitBranch(rootDir)}
+}
+
+// loadGitBranch returns the current branch name for rootDir, or a short
+// commit SHA when HEAD is detached (rebase / bisect / a manual checkout
+// of a tag). Returns "" for non-repos and any other failure mode — the
+// caller treats that as "no branch label to show" and the status bar
+// just doesn't render one.
+//
+// We try `symbolic-ref --short HEAD` first because it's the cheapest way
+// to distinguish "on a branch" from "detached"; the fallback to
+// `rev-parse --short HEAD` only fires when symbolic-ref's non-zero exit
+// tells us we're detached.
+func loadGitBranch(rootDir string) string {
+	if rootDir == "" {
+		return ""
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "symbolic-ref", "--short", "HEAD").Output(); err == nil {
+		return strings.TrimRight(string(out), "\n\r")
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "rev-parse", "--short", "HEAD").Output(); err == nil {
+		return strings.TrimRight(string(out), "\n\r")
+	}
+	return ""
 }
 
 // parsePorcelain converts the bytes returned by `git status --porcelain`

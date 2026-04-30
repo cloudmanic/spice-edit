@@ -1311,3 +1311,50 @@ func TestTabBarClick_ClosesViaX(t *testing.T) {
 		t.Fatalf("expected close, got %d tabs", len(a.tabs))
 	}
 }
+
+// TestDrawStatusBar_RendersBranchRightAligned pins down the lower-right
+// branch label: when gitBranch is set, the rightmost cells of the
+// status bar carry " <branch> " in order, so the user can glance at
+// the corner and read which checkout they're on.
+func TestDrawStatusBar_RendersBranchRightAligned(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.gitBranch = "feat/widgets"
+	a.draw()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.Show() // SimulationScreen serves GetContents from the *front* buffer.
+
+	cells, w, _ := scr.GetContents()
+	_, sy, _, _ := a.statusRect()
+
+	want := []rune(" feat/widgets ")
+	startX := w - len(want)
+	for i, r := range want {
+		c := cells[sy*w+startX+i]
+		if len(c.Runes) == 0 || c.Runes[0] != r {
+			t.Fatalf("status bar col %d = %v, want %q",
+				startX+i, c.Runes, r)
+		}
+	}
+}
+
+// TestDrawStatusBar_OmitsBranchWhenEmpty confirms a non-repo project
+// (gitBranch == "") doesn't paint a stray label or steal cells from
+// the left-side text — the right edge should just be the bar's bg.
+func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.gitBranch = ""
+	a.draw()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	_, sy, _, _ := a.statusRect()
+
+	// Tail of the status bar must be blank — the bar's fill character.
+	for x := w - 5; x < w; x++ {
+		c := cells[sy*w+x]
+		if len(c.Runes) > 0 && c.Runes[0] != ' ' {
+			t.Fatalf("status bar col %d = %v, expected blank tail", x, c.Runes)
+		}
+	}
+}
