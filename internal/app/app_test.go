@@ -50,7 +50,6 @@ func newTestApp(t *testing.T, root string) *App {
 		theme:          theme.Default(),
 		rootDir:        tree.Root.Path,
 		tree:           tree,
-		pendingClose:   -1,
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
@@ -328,9 +327,10 @@ func TestOpenFile_ErrorFlash(t *testing.T) {
 	}
 }
 
-// TestRequestCloseTab_DirtyLatch arms pendingClose on the first request to
-// close a dirty tab and actually closes it on the second.
-func TestRequestCloseTab_DirtyLatch(t *testing.T) {
+// TestRequestCloseTab_DirtyOpensModal proves a dirty tab does not close
+// on first request and instead opens the unsaved-changes modal so the
+// user can pick Save / Discard / Cancel.
+func TestRequestCloseTab_DirtyOpensModal(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "dirty.txt")
 	if err := os.WriteFile(target, []byte("x"), 0644); err != nil {
@@ -342,18 +342,10 @@ func TestRequestCloseTab_DirtyLatch(t *testing.T) {
 
 	a.requestCloseTab(0)
 	if len(a.tabs) != 1 {
-		t.Fatalf("first close on dirty tab should latch, not close")
+		t.Fatalf("dirty tab should not close until the user picks an action")
 	}
-	if a.pendingClose != 0 {
-		t.Fatalf("pendingClose: got %d", a.pendingClose)
-	}
-
-	a.requestCloseTab(0)
-	if len(a.tabs) != 0 {
-		t.Fatalf("second close on dirty tab should remove it; got %d tabs", len(a.tabs))
-	}
-	if a.pendingClose != -1 {
-		t.Fatalf("pendingClose should reset to -1, got %d", a.pendingClose)
+	if !a.dirtyOpen {
+		t.Fatal("dirty close modal should be open")
 	}
 }
 
@@ -825,6 +817,9 @@ func TestMenuClickPaths(t *testing.T) {
 	a.menuOpen = true
 	a.menuRefreshTree()
 
+	// Clean the tab before quitting; the dirty-quit path is exercised
+	// separately in dirty_modal_test.go.
+	tab.Dirty = false
 	a.menuOpen = true
 	a.menuQuit()
 	if !a.quit {

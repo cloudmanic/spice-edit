@@ -271,7 +271,6 @@ type App struct {
 	clipBuf      string
 	statusMsg    string
 	statusUntil  time.Time
-	pendingClose int
 	dragMode     string // "editor" while a drag-select is active.
 	lastClick    clickRecord
 	lastTabRects []tabRect
@@ -297,6 +296,18 @@ type App struct {
 	confirmMessage  string
 	confirmHover    int
 	confirmCallback func(*App)
+
+	// Save/Discard/Cancel modal — used when closing a dirty tab or
+	// quitting with unsaved changes. dirtyHover indexes the button row:
+	// 0 = Cancel (safe default for an accidental Enter), 1 = Discard,
+	// 2 = Save. Save and Discard run the corresponding callbacks; Cancel
+	// just dismisses.
+	dirtyOpen            bool
+	dirtyTitle           string
+	dirtyMessage         string
+	dirtyHover           int
+	dirtySaveCallback    func(*App)
+	dirtyDiscardCallback func(*App)
 
 	// Right-click context menu over the file tree.
 	contextOpen  bool
@@ -369,7 +380,6 @@ func New(rootDir string) (*App, error) {
 		theme:          th,
 		rootDir:        rootDir,
 		tree:           tree,
-		pendingClose:   -1,
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
@@ -695,6 +705,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleConfirmKey(ev)
 		return
 	}
+	if a.dirtyOpen {
+		a.handleDirtyKey(ev)
+		return
+	}
 	if a.contextOpen {
 		a.handleContextKey(ev)
 		return
@@ -822,6 +836,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.confirmOpen {
 		a.handleConfirmMouse(x, y, btn)
+		return
+	}
+	if a.dirtyOpen {
+		a.handleDirtyMouse(x, y, btn)
 		return
 	}
 	if a.contextOpen {
@@ -1010,7 +1028,6 @@ func (a *App) tabBarClick(x, _ int) {
 				return
 			}
 			a.activeTab = r.Index
-			a.pendingClose = -1
 			return
 		}
 	}
@@ -1242,36 +1259,93 @@ func (a *App) openFile(path string) {
 
 // saveActiveTab writes the active tab's buffer to disk.
 func (a *App) saveActiveTab() {
-	tab := a.activeTabPtr()
-	if tab == nil {
-		return
+	a.saveTabAt(a.activeTab)
+}
+
+// saveTabAt saves the tab at idx. Returns true on success, false on
+// any kind of failure (no tab, untitled, IO error). Failures flash a
+// status message so the caller doesn't have to. Pulled out from
+// saveActiveTab so the dirty-close modal can save a specific tab and
+// branch on success — saving and then closing must not eat the user's
+// work when the save itself failed.
+func (a *App) saveTabAt(idx int) bool {
+	if idx < 0 || idx >= len(a.tabs) {
+		return false
 	}
+	tab := a.tabs[idx]
 	if tab.Path == "" {
 		a.flash("Saving untitled tabs is not supported yet")
-		return
+		return false
 	}
 	if err := tab.Save(); err != nil {
 		a.flash(fmt.Sprintf("Save failed: %v", err))
-		return
+		return false
 	}
 	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s", filepath.Base(tab.Path)))
+	return true
 }
 
-// requestCloseTab closes the tab at idx, or arms a pendingClose state when
-// the tab is dirty so that the next close-attempt actually closes it. This
-// is the editor's mouse-friendly substitute for a save-or-discard modal.
+// saveAllDirty walks every open tab and saves each dirty one. Returns
+// true when every dirty tab saved successfully — used by the quit flow
+// to decide whether it's safe to actually exit. The first failure
+// short-circuits because there's no point cascading more failed saves
+// past one we've already flashed about, and the user needs to react to
+// the first error before deciding what to do with the rest.
+func (a *App) saveAllDirty() bool {
+	for i, tab := range a.tabs {
+		if !tab.Dirty {
+			continue
+		}
+		if !a.saveTabAt(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// dirtyTabCount returns the number of tabs with unsaved changes.
+// Used by the quit flow to decide whether to skip the modal entirely.
+func (a *App) dirtyTabCount() int {
+	n := 0
+	for _, tab := range a.tabs {
+		if tab.Dirty {
+			n++
+		}
+	}
+	return n
+}
+
+// requestCloseTab closes the tab at idx. A clean tab closes immediately;
+// a dirty tab opens the unsaved-changes modal so the user can pick
+// Save / Discard / Cancel. The Save path saves the buffer first and only
+// closes the tab on success — a save error would otherwise silently lose
+// the user's work.
 func (a *App) requestCloseTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
-	if a.tabs[idx].Dirty && a.pendingClose != idx {
-		a.pendingClose = idx
-		a.flash("Unsaved changes — click × again to discard, or use Save & close")
+	tab := a.tabs[idx]
+	if !tab.Dirty {
+		a.closeTab(idx)
 		return
 	}
-	a.closeTab(idx)
-	a.pendingClose = -1
+	name := filepath.Base(tab.Path)
+	if name == "" || name == "." {
+		name = "untitled"
+	}
+	a.openDirtyClose(
+		"Unsaved changes",
+		name+" has unsaved changes.",
+		func(app *App) {
+			// Save → close. saveTabAt flashes its own error, in which
+			// case we keep the tab around so the user can react.
+			if app.saveTabAt(idx) {
+				app.closeTab(idx)
+			}
+		},
+		func(app *App) { app.closeTab(idx) },
+	)
 }
 
 // closeTab removes the tab at idx without any dirty-check.
@@ -1647,10 +1721,45 @@ func (a *App) sidebarToggleLabel() string {
 	return "Show file explorer"
 }
 
-// menuQuit exits the editor.
+// menuQuit exits the editor. When any tab has unsaved changes, opens the
+// dirty-close modal so the user can pick Save (save all then quit),
+// Discard (quit anyway), or Cancel. With no dirty tabs we exit straight
+// away.
 func (a *App) menuQuit() {
 	a.closeMenu()
-	a.quit = true
+	dirty := a.dirtyTabCount()
+	if dirty == 0 {
+		a.quit = true
+		return
+	}
+	var message string
+	if dirty == 1 {
+		// Find the one dirty tab so we can name it in the modal.
+		for _, tab := range a.tabs {
+			if tab.Dirty {
+				name := filepath.Base(tab.Path)
+				if name == "" || name == "." {
+					name = "untitled"
+				}
+				message = name + " has unsaved changes. Save before quitting?"
+				break
+			}
+		}
+	} else {
+		message = fmt.Sprintf("%d files have unsaved changes. Save all before quitting?", dirty)
+	}
+	a.openDirtyClose(
+		"Unsaved changes",
+		message,
+		func(app *App) {
+			// Only quit if every save succeeded — a half-saved exit
+			// would silently lose work on whichever tab failed.
+			if app.saveAllDirty() {
+				app.quit = true
+			}
+		},
+		func(app *App) { app.quit = true },
+	)
 }
 
 // -----------------------------------------------------------------------------
@@ -1701,6 +1810,9 @@ func (a *App) draw() {
 	}
 	if a.confirmOpen {
 		a.drawConfirm()
+	}
+	if a.dirtyOpen {
+		a.drawDirtyClose()
 	}
 }
 
