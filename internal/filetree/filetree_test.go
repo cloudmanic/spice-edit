@@ -510,6 +510,126 @@ func TestRender_TinyHeightDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestRender_DirtyFileUsesModifiedColor seeds the tree's DirtyFiles set
+// with one path and asserts the renderer paints that row in
+// theme.Modified — the colour the editor uses everywhere else (tab dot,
+// future status indicators) for "uncommitted change".
+func TestRender_DirtyFileUsesModifiedColor(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alpha := findChild(tr.Root, "alpha")
+	if err := alpha.reload(); err != nil {
+		t.Fatalf("reload alpha: %v", err)
+	}
+	alpha.Expanded = true
+	inner := findChild(alpha, "inner.go")
+	if inner == nil {
+		t.Fatal("alpha/inner.go missing from fixture")
+	}
+	tr.DirtyFiles = map[string]bool{inner.Path: true}
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "inner.go")
+	if rowY < 0 {
+		t.Fatal("could not find inner.go row in render output")
+	}
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
+		t.Fatalf("expected inner.go row to be drawn in Modified color")
+	}
+}
+
+// TestRender_DirtyFolderUsesModifiedColor proves that a folder appearing
+// in DirtyFolders gets the Modified colour even when none of its visible
+// children do — collapsed branches still need to signal "something
+// changed inside".
+func TestRender_DirtyFolderUsesModifiedColor(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alpha := findChild(tr.Root, "alpha")
+	tr.DirtyFolders = map[string]bool{alpha.Path: true}
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row in render output")
+	}
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
+		t.Fatal("expected alpha folder row to be drawn in Modified color")
+	}
+}
+
+// TestRender_DirtyAndActiveStaysBold confirms that the active-folder
+// styling (bold) and the dirty-folder styling (Modified colour) compose
+// cleanly — the user shouldn't lose the "current target" cue just
+// because the folder also has uncommitted changes.
+func TestRender_DirtyAndActiveStaysBold(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	alpha := findChild(tr.Root, "alpha")
+	tr.ActiveFolder = alpha.Path
+	tr.DirtyFolders = map[string]bool{alpha.Path: true}
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row")
+	}
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
+		t.Error("expected alpha row to be Modified colour")
+	}
+	if !rowHasBold(cells, w, rowY) {
+		t.Error("expected alpha row to remain bold")
+	}
+}
+
+// findRowY scans the rendered cell buffer for the first row whose
+// reconstructed text contains needle.
+func findRowY(cells []tcell.SimCell, w, h int, needle string) int {
+	for y := 0; y < h; y++ {
+		if containsRune(rowText(cells, w, y), needle) {
+			return y
+		}
+	}
+	return -1
+}
+
+// rowHasColor reports whether any non-blank cell in row y was drawn with
+// the given foreground colour. The tree pads rows with blank spaces; we
+// ignore those so a leading-pad colour mismatch isn't reported.
+func rowHasColor(cells []tcell.SimCell, w, y int, want tcell.Color) bool {
+	for x := 0; x < w; x++ {
+		c := cells[y*w+x]
+		if len(c.Runes) == 0 || c.Runes[0] == ' ' {
+			continue
+		}
+		fg, _, _ := c.Style.Decompose()
+		if fg == want {
+			return true
+		}
+	}
+	return false
+}
+
+// rowHasBold reports whether any cell in row y carries tcell.AttrBold.
+func rowHasBold(cells []tcell.SimCell, w, y int) bool {
+	for x := 0; x < w; x++ {
+		_, _, attr := cells[y*w+x].Style.Decompose()
+		if attr&tcell.AttrBold != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // containsRune is a tiny "string contains substring" wrapper that keeps
 // the imports of this test file lean.
 func containsRune(haystack, needle string) bool {
