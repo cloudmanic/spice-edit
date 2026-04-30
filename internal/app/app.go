@@ -160,6 +160,10 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Redo", action: (*App).menuRedo, enabled: (*App).hasRedo},
 			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
+		// Search
+		{
+			{label: "Find in file", action: (*App).menuFind, enabled: (*App).hasFindable},
+		},
 		// File actions
 		{
 			{action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
@@ -301,6 +305,16 @@ type App struct {
 	contextNode  *filetree.Node
 	contextItems []contextItem
 	contextHover int
+
+	// Find bar — opened with Esc-f or the "Find in file" menu entry. The
+	// bar is a 1-row strip pinned above the status bar; while it's open
+	// it owns the keyboard. The active tab carries the query and match
+	// list (see editor.Tab.SetFindQuery), so each tab remembers its own
+	// search across closes / reopens.
+	findOpen   bool
+	findValue  []rune
+	findCursor int
+	findScroll int
 
 	// Auto-scroll while drag-selecting past the editor's top/bottom edge.
 	// lastDragX/Y is the most recent mouse position so the auto-scroll
@@ -611,10 +625,16 @@ func (a *App) tabBarRect() (x, y, w, h int) {
 }
 
 // editorRect returns the editor body's screen rectangle (everything to the
-// right of the sidebar, between the tab bar and the status bar).
+// right of the sidebar, between the tab bar and the status bar). When the
+// find bar is open, one row is taken out of the bottom — the bar is
+// pinned directly above the status bar.
 func (a *App) editorRect() (x, y, w, h int) {
 	sw := a.sidebarW()
-	return sw, 1, a.width - sw, a.height - 2
+	h = a.height - 2
+	if a.findOpen {
+		h -= findBarHeight
+	}
+	return sw, 1, a.width - sw, h
 }
 
 // statusRect returns the status bar's screen rectangle (full-width bottom row).
@@ -677,6 +697,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	}
 	if a.contextOpen {
 		a.handleContextKey(ev)
+		return
+	}
+	if a.findOpen {
+		a.handleFindKey(ev)
 		return
 	}
 
@@ -1658,6 +1682,9 @@ func (a *App) draw() {
 		a.drawEmptyEditor()
 	}
 
+	if a.findOpen {
+		a.drawFindBar()
+	}
 	a.drawStatusBar()
 
 	// Modal layering, bottom-up. Only one of these is open at a time

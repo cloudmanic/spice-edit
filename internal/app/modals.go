@@ -47,12 +47,18 @@ type contextItem struct {
 // closeAllModals dismisses every modal in one shot and parks any in-flight
 // drag / auto-scroll state. Every "open this modal" helper calls it first
 // so the modals stay mutually exclusive and a stale drag from before the
-// modal opened can't keep extending a selection underneath it.
+// modal opened can't keep extending a selection underneath it. The find
+// bar is closed too — opening a modal should never leave it taking
+// keystrokes underneath the modal.
 func (a *App) closeAllModals() {
 	a.menuOpen = false
 	a.promptOpen = false
 	a.confirmOpen = false
 	a.contextOpen = false
+	a.findOpen = false
+	a.findValue = nil
+	a.findCursor = 0
+	a.findScroll = 0
 	a.hoveredMenuRow = -1
 	a.contextNode = nil
 	a.contextItems = nil
@@ -63,9 +69,13 @@ func (a *App) closeAllModals() {
 }
 
 // anyModalOpen reports whether any modal is on screen. Used by the main
-// event router to short-circuit normal editor input.
+// event router to short-circuit normal editor input. The find bar is
+// included so click-through behaviour matches the modals — a click into
+// the editor body while the bar is up still routes to the editor (which
+// is what the user wants), but a key/mouse handler can use this to know
+// "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.findOpen
 }
 
 // -----------------------------------------------------------------------------

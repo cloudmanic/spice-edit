@@ -34,6 +34,14 @@ type Theme struct {
 	Modified   tcell.Color // Dirty indicator (unsaved changes).
 	Error      tcell.Color // Error messages.
 
+	// FindMatch / FindCurrent paint search hits in the editor body.
+	// FindMatch is a soft tint applied to every match in the viewport;
+	// FindCurrent is the louder color drawn under the "active" match
+	// (the one Enter/Esc-g will jump past) so the user can find their
+	// place at a glance.
+	FindMatch   tcell.Color
+	FindCurrent tcell.Color
+
 	// --- File tree ---
 	FolderColor tcell.Color
 	FileColor   tcell.Color
@@ -72,6 +80,13 @@ func Default() Theme {
 		Selection:  tcell.NewRGBColor(0x33, 0x46, 0x7c),
 		Modified:   tcell.NewRGBColor(0xe0, 0xaf, 0x68),
 		Error:      tcell.NewRGBColor(0xf7, 0x76, 0x8e),
+
+		// Find. FindMatch is a desaturated amber so it reads as "all
+		// hits" without competing with the syntax palette. FindCurrent
+		// is full amber — the same shade the dirty indicator uses —
+		// so the active match jumps off the page.
+		FindMatch:   tcell.NewRGBColor(0x6f, 0x52, 0x1f),
+		FindCurrent: tcell.NewRGBColor(0xe0, 0xaf, 0x68),
 
 		// Tree.
 		FolderColor: tcell.NewRGBColor(0x7a, 0xa2, 0xf7),

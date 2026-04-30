@@ -71,6 +71,15 @@ type Tab struct {
 	Mode     string
 	Image    image.Image // populated when Mode == imageMode
 	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
+
+	// Find state — populated when the user opens the find bar and
+	// types a query. The UI layer (App) owns the bar geometry and
+	// keystroke routing; the tab owns the query, the resolved match
+	// list, and the index of the "current" match so the query
+	// survives switching tabs and re-opening the bar.
+	FindQuery   string
+	FindMatches []Match
+	FindIndex   int // -1 = no current match; otherwise an index into FindMatches.
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
@@ -573,6 +582,17 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 				p := Position{Line: lineIdx, Col: srcCol}
 				if !PosLess(p, selStart) && PosLess(p, selEnd) {
 					st = st.Background(th.Selection)
+				}
+			}
+			// Find-match highlight. Painted *after* selection so an
+			// active find on top of a stale selection still reads
+			// clearly. The "current" match (FindIndex) gets a louder
+			// color so the user can pick it out at a glance.
+			if mIdx := t.matchAtRune(lineIdx, srcCol); mIdx >= 0 {
+				if mIdx == t.FindIndex {
+					st = st.Background(th.FindCurrent).Foreground(th.BG)
+				} else {
+					st = st.Background(th.FindMatch)
 				}
 			}
 			scr.SetContent(contentX+col, cy, r, nil, st)
