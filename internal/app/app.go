@@ -1142,11 +1142,18 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 // sidebarClick toggles a directory or opens a file when the user clicks a
 // row in the file tree. Either action also updates the editor's "active
 // folder" so the next New File from the main menu defaults to wherever
-// the user is currently focused.
+// the user is currently focused. Clicking the project-root row only
+// resets the active folder — it never toggles the root's expansion
+// since the root is always shown and there's no useful "collapsed
+// root" state.
 func (a *App) sidebarClick(x, y int) {
 	sx, sy, _, _ := a.sidebarRect()
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
+		return
+	}
+	if n == a.tree.Root {
+		a.setActiveFolder(a.rootDir)
 		return
 	}
 	if n.IsDir {

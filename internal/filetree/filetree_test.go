@@ -349,15 +349,26 @@ func TestClampScroll_AllCases(t *testing.T) {
 	}
 }
 
-// TestHitTest_HeaderRows confirms clicks on the two header rows return
-// ok=false — those rows are the explorer label and project name, not
-// targets.
-func TestHitTest_HeaderRows(t *testing.T) {
+// TestHitTest_ExplorerHeaderMisses confirms y=0 (the all-caps
+// "EXPLORER" row) is not a click target — clicking it should
+// neither set the active folder nor open anything.
+func TestHitTest_ExplorerHeaderMisses(t *testing.T) {
 	tr := &Tree{visible: []*Node{{Name: "a"}}}
-	for _, y := range []int{0, 1} {
-		if n, ok := tr.HitTest(0, y); ok || n != nil {
-			t.Fatalf("y=%d should miss, got ok=%v node=%v", y, ok, n)
-		}
+	if n, ok := tr.HitTest(0, 0); ok || n != nil {
+		t.Fatalf("EXPLORER row should miss, got ok=%v node=%v", ok, n)
+	}
+}
+
+// TestHitTest_ProjectRootRowReturnsRoot pins the "click the project
+// name to reset active folder" behaviour. Without this, once a user
+// has selected any subfolder there's no way to set the active folder
+// back to the project root short of restarting the editor.
+func TestHitTest_ProjectRootRowReturnsRoot(t *testing.T) {
+	root := &Node{Name: "proj", IsDir: true, Path: "/proj"}
+	tr := &Tree{Root: root, visible: []*Node{{Name: "a"}}}
+	n, ok := tr.HitTest(0, 1)
+	if !ok || n != root {
+		t.Fatalf("y=1 should map to root, got ok=%v node=%v", ok, n)
 	}
 }
 

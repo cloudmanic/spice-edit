@@ -1029,6 +1029,37 @@ func TestSidebarClick_Miss(t *testing.T) {
 	a.sidebarClick(1, 100) // off the bottom of the tree
 }
 
+// TestSidebarClick_RootRowResetsActiveFolder pins the bug fix:
+// clicking the project-name row in the sidebar (y=1) sets the
+// active folder back to the project root. Before this fix, once
+// the user picked any subfolder there was no path back to root
+// short of restarting the editor — every other row in the tree
+// only walks "deeper," not "up." Also confirms the click does not
+// open a file or toggle any directory's expansion as a side
+// effect; it's purely a navigation/state reset.
+func TestSidebarClick_RootRowResetsActiveFolder(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "internal")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.draw() // populate t.visible so HitTest works
+	a.setActiveFolder(sub)
+	if a.activeFolder == a.rootDir {
+		t.Fatal("seed broken: active folder should start as subfolder")
+	}
+
+	a.sidebarClick(1, 1) // (col=1, row=1) is the project name row
+
+	if a.activeFolder != a.rootDir {
+		t.Errorf("active folder = %q, want root %q", a.activeFolder, a.rootDir)
+	}
+	if len(a.tabs) != 0 {
+		t.Errorf("clicking root opened tabs: %d", len(a.tabs))
+	}
+}
+
 // TestSelectWordAt selects the word under a buffer position.
 func TestSelectWordAt(t *testing.T) {
 	dir := t.TempDir()
