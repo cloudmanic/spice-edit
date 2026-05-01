@@ -60,11 +60,21 @@ const (
 	menuButtonWidth = 4
 
 	// modalWidth is the action modal's column count. Sized to comfortably
-	// fit the longest built-in label ("Save & close tab") plus chevron and
-	// padding; very long custom-action labels will clip but won't break
-	// layout. Height is computed dynamically from the visible groups —
-	// see menuLayout.
-	modalWidth = 38
+	// fit the longest dynamic label — "Rename folder (subdir/)" with a
+	// folder name up to maxLabelSuffix runes — plus the leading "▸ "
+	// chevron and one cell of right padding. Very long custom-action
+	// labels will still clip but won't break layout. Height is computed
+	// dynamically from the visible groups — see menuLayout.
+	modalWidth = 48
+
+	// maxLabelSuffix is the rune budget that newFileLabel /
+	// renameFolderLabel / deleteFolderLabel use when truncating their
+	// "(in subdir/)" / "(subdir/)" suffix. Pinned alongside modalWidth
+	// so the two stay in lockstep — bumping the modal without bumping
+	// the suffix budget leaves dead space, and shrinking the modal
+	// without shrinking the suffix budget reintroduces the overflow
+	// bug where folder names bled into the editor underneath.
+	maxLabelSuffix = 30
 
 	// autoScrollTick is how often the auto-scroll goroutine emits a tick
 	// while the user is drag-selecting with the cursor parked outside the

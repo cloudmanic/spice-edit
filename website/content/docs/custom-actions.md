@@ -8,7 +8,7 @@ weight: 80
 
 SpiceEdit reads user-defined shell-out actions from `~/.config/spiceedit/actions.json` and prepends them to the action menu. Each action runs against the currently open file when you click it.
 
-The use case it was built for: you SSH from your laptop into a remote box, edit a file there, and want to *open it on your laptop* — but Sixel and the Kitty graphics protocol don't survive the trip through tmux/zellij. The trick is to bypass the terminal entirely and pipe the file back over a second SSH connection.
+The use case it was built for: you SSH from your laptop into a remote box, edit a file there, and want to _open it on your laptop_ — but Sixel and the Kitty graphics protocol don't survive the trip through tmux/zellij. The trick is to bypass the terminal entirely and pipe the file back over a second SSH connection.
 
 ## File location
 
@@ -42,7 +42,7 @@ The action only enables when there's a file open. Commands run in a background g
 
 ## The two-hop SSH gotcha
 
-`$HOME` and `~` outside `ssh "..."` quotes expand to the *SpiceEdit host's* home directory — that's the remote box, not your laptop. To run something on your laptop, wrap the remote command in quotes:
+`$HOME` and `~` outside `ssh "..."` quotes expand to the _SpiceEdit host's_ home directory — that's the remote box, not your laptop. To run something on your laptop, wrap the remote command in quotes:
 
 ```
 ssh rager "open ~/Downloads/$FILENAME"
@@ -76,11 +76,17 @@ The schema is deliberately small. Anything `sh` can do, `actions.json` can do:
 ```json
 {
   "actions": [
-    { "label": "Send to ChatGPT",  "command": "cat \"$FILE\" | pbcopy && open https://chat.openai.com/" },
-    { "label": "Lint with eslint", "command": "cd $(dirname \"$FILE\") && eslint \"$FILENAME\"" },
-    { "label": "Run formatter",    "command": "gofmt -w \"$FILE\"" },
-    { "label": "Open in Finder",   "command": "open -R \"$FILE\"" },
-    { "label": "Copy to gist",     "command": "gh gist create \"$FILE\"" }
+    {
+      "label": "Send to ChatGPT",
+      "command": "cat \"$FILE\" | pbcopy && open https://chat.openai.com/"
+    },
+    {
+      "label": "Lint with eslint",
+      "command": "cd $(dirname \"$FILE\") && eslint \"$FILENAME\""
+    },
+    { "label": "Run formatter", "command": "gofmt -w \"$FILE\"" },
+    { "label": "Open in Finder", "command": "open -R \"$FILE\"" },
+    { "label": "Copy to gist", "command": "gh gist create \"$FILE\"" }
   ]
 }
 ```

@@ -232,9 +232,10 @@ func (a *App) newFileLabel() string {
 		return "New file"
 	}
 	rel := a.relativeFolderLabel(folder)
-	// Truncate so the row never overflows the modal width. The modal is
-	// 38 cells wide; "▸" + label + padding leaves ~30 cells for text.
-	const maxLen = 28
+	// Truncate so the row never overflows the modal width — see
+	// maxLabelSuffix in app.go for why this is shared with the
+	// folder-rename / folder-delete labels.
+	const maxLen = maxLabelSuffix
 	suffix := " (in " + rel + ")"
 	if runeLen(suffix) > maxLen {
 		// Drop characters from the middle of rel so the trailing folder
@@ -397,7 +398,7 @@ func (a *App) renameFolderLabel() string {
 		return "Rename folder"
 	}
 	rel := a.relativeFolderLabel(folder)
-	const maxLen = 28
+	const maxLen = maxLabelSuffix
 	suffix := " (" + rel + ")"
 	if runeLen(suffix) > maxLen {
 		keep := maxLen - len(" (…)")
@@ -457,7 +458,7 @@ func (a *App) deleteFolderLabel() string {
 		return "Delete folder"
 	}
 	rel := a.relativeFolderLabel(folder)
-	const maxLen = 28
+	const maxLen = maxLabelSuffix
 	suffix := " (" + rel + ")"
 	if runeLen(suffix) > maxLen {
 		keep := maxLen - len(" (…)")
