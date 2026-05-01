@@ -57,6 +57,7 @@ func (a *App) closeAllModals() {
 	a.contextOpen = false
 	a.dirtyOpen = false
 	a.findOpen = false
+	a.finderOpen = false
 	a.findValue = nil
 	a.findCursor = 0
 	a.findScroll = 0
@@ -84,7 +85,7 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.findOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.findOpen || a.finderOpen
 }
 
 // -----------------------------------------------------------------------------

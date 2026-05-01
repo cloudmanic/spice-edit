@@ -31,6 +31,7 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/finder"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 	"github.com/cloudmanic/spice-edit/internal/version"
 )
@@ -162,6 +163,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// Search
 		{
 			{label: "Find in file", action: (*App).menuFind, enabled: (*App).hasFindable},
+			{label: "Find file in project", action: (*App).menuFindFile, enabled: (*App).hasFinder},
 		},
 		// File actions
 		{
@@ -351,6 +353,18 @@ type App struct {
 	// menuLayout. nil / empty when the user hasn't configured any.
 	customActions []customactions.Action
 
+	// finder + finder modal state — project-wide file search ("Esc p"
+	// or ≡ → Find file). The Finder owns the cached index and a
+	// background-build goroutine; the rest of these fields are
+	// transient UI state for the modal itself.
+	finder         *finder.Finder
+	finderOpen     bool
+	finderQuery    []rune
+	finderCursor   int
+	finderScroll   int
+	finderSelected int
+	finderResults  []finder.Result
+
 	// confirmCancelHook runs when the active confirm modal is dismissed
 	// without a Yes — i.e. the user picked No, hit Esc, or clicked
 	// outside. Set after openConfirm by flows that want to react to the
@@ -398,6 +412,16 @@ func New(rootDir string) (*App, error) {
 	a.loadCustomActions()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
+	// Kick off the project file index in the background so that by
+	// the time the user hits Esc-p (or ≡ → Find file) the modal can
+	// open with results already in hand. On a 50k-file repo this
+	// takes ~150ms; the user pays it once at startup instead of
+	// when they're trying to navigate.
+	a.finder = finder.New(rootDir)
+	scr2 := a.screen
+	a.finder.Rebuild(func() {
+		_ = scr2.PostEvent(&finderRebuiltEvent{when: time.Now()})
+	})
 	return a, nil
 }
 
@@ -514,10 +538,22 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.tree.Refresh()
 		a.reconcileOpenTabsWithDisk()
 		a.refreshGitStatus()
+		// Refresh the finder index on the same cadence as the tree.
+		// External file changes (a teammate's pull, a CI artifact)
+		// should be visible in the finder without restarting the
+		// editor — matching what the sidebar already does.
+		a.invalidateFinder()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
 	case *formatDoneEvent:
 		a.handleFormatDone(e)
+	case *finderRebuiltEvent:
+		// The background indexer just finished. Re-run the visible
+		// query so "Indexing…" gives way to real results without
+		// the user having to type or wait for the next keystroke.
+		if a.finderOpen {
+			a.refreshFinderResults()
+		}
 	}
 }
 
@@ -728,6 +764,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFindKey(ev)
 		return
 	}
+	if a.finderOpen {
+		a.handleFinderKey(ev)
+		return
+	}
 
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
@@ -855,6 +895,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.contextOpen {
 		a.handleContextMouse(x, y, btn)
+		return
+	}
+	if a.finderOpen {
+		a.handleFinderMouse(x, y, btn)
 		return
 	}
 
@@ -1836,6 +1880,9 @@ func (a *App) draw() {
 	}
 	if a.dirtyOpen {
 		a.drawDirtyClose()
+	}
+	if a.finderOpen {
+		a.drawFinder()
 	}
 }
 
