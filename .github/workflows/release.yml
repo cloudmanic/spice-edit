@@ -24,9 +24,14 @@ on:
   push:
     branches: [main]
 
-# Pushes back to main need write access to the repo's contents.
+# Pushes back to main need write access to the repo's contents. The
+# `actions: write` scope lets the final step kick off the Pages
+# workflow via workflow_dispatch — the version-bump commit carries
+# [skip ci] so the auto-deploy on internal/version/version.go won't
+# fire on its own.
 permissions:
   contents: write
+  actions: write
 
 # Serialise releases — no two version-bumps racing each other.
 concurrency:
@@ -119,3 +124,15 @@ jobs:
           # Same-repo brew formula push uses the default workflow token —
           # no separate tap repo or PAT needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Kick the Pages deploy explicitly. The version bump and brew
+      # formula commits both carry [skip ci] (otherwise this workflow
+      # would loop on its own pushes), and pages.yml is gated by file
+      # paths — so without this step the marketing site is stranded at
+      # whatever version it last deployed, one bump behind reality.
+      # Uses workflow_dispatch (declared in pages.yml) and runs after
+      # the version push so the deploy reads the just-bumped value.
+      - name: Trigger Pages redeploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run pages.yml --ref main
