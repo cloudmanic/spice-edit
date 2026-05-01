@@ -189,6 +189,7 @@ within half a second tap one of the letters below.
 | `Esc n`     | New file        |
 | `Esc t`     | Toggle sidebar  |
 | `Esc f`     | Find in file    |
+| `Esc p`     | Find file in project |
 
 A lone `Esc` is harmless — if you don't follow it with a bound letter
 within the window, your next keystroke goes to the editor as normal,
@@ -217,6 +218,36 @@ above the status bar:
 
 There's no regex, whole-word, or case-sensitive toggle in v1 — the
 common case is "I know roughly what I'm looking for, take me there."
+
+### Find file in project
+
+`Esc p` (or **Find file in project** from the `≡` menu) opens a
+fuzzy file finder over every non-ignored file in the project:
+
+```
+┌ Find file                                                    esc ┐
+│  app.go                                              50/12345    │
+│  internal/app/app.go                                             │
+│  internal/app/app_test.go                                        │
+│  internal/finder/score.go                                        │
+│  ...                                                             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- Type to fuzzy-match. The matcher prefers basename hits, consecutive
+  matches, and word boundaries — typing `tab` finds `tab.go` before
+  `tabs/foo.go` before `notable.go`.
+- `↑` / `↓` to move, `Enter` to open, `Esc` to dismiss. Mouse hover
+  highlights, click opens.
+- Honours `.gitignore` automatically. The fast path uses
+  `git ls-files --cached --others --exclude-standard` (so a 50k-file
+  repo indexes in ~150ms); non-git projects fall back to a Go
+  walker that still respects the project root's `.gitignore`.
+- Indexed in the background at startup so the modal opens with
+  results already in hand. Refreshes on the same 10-second cadence
+  as the file tree, plus immediately after any create/rename/delete
+  inside the editor.
+- Only files are listed — no directories, no symlinked duplicates.
 
 ## Custom actions (open remote files on your laptop)
 
@@ -473,6 +504,7 @@ them while still making it one click to opt a project in.
 │   ├── clipboard/            # OSC 52 clipboard with tmux passthrough
 │   ├── customactions/        # Loader for ~/.config/spiceedit/actions.json
 │   ├── format/               # Format-on-save config + trust store
+│   ├── finder/               # Project file index + fuzzy matcher
 │   ├── theme/                # Tokyo Night-inspired palette
 │   └── version/              # Single-line version constant
 ├── .github/workflows/        # Auto-release pipeline

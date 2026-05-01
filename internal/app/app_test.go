@@ -1248,9 +1248,9 @@ func TestHandleMenuMouse_ClicksRowAndOutside(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openMenu()
 	mx, my, _, _ := a.menuModalRect()
-	// Click on the toggle row (relY=25) — flips the sidebar.
+	// Click on the toggle row (relY=26) — flips the sidebar.
 	before := a.sidebarShown
-	a.handleMenuMouse(mx+5, my+25, tcell.Button1)
+	a.handleMenuMouse(mx+5, my+26, tcell.Button1)
 	if a.sidebarShown == before {
 		t.Fatal("expected toggle to fire")
 	}
@@ -1383,13 +1383,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 29 {
-		t.Errorf("modalHeight = %d, want 29", h)
+	if h != 30 {
+		t.Errorf("modalHeight = %d, want 30", h)
 	}
-	if got := len(items); got != 19 {
-		t.Errorf("item count = %d, want 19 built-ins", got)
+	if got := len(items); got != 20 {
+		t.Errorf("item count = %d, want 20 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 12, 20, 24, 26}
+	wantDiv := []int{2, 6, 10, 13, 21, 25, 27}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1412,8 +1412,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 32 { // 29 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 32", h)
+	if h != 33 { // 30 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 33", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.
