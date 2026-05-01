@@ -108,9 +108,10 @@ func (e *treeRefreshEvent) When() time.Time { return e.when }
 // can flash a sensible status message — running scp / ssh inline would
 // freeze the UI for the duration of the network round-trip.
 type customActionDoneEvent struct {
-	when  time.Time
-	label string
-	err   error
+	when   time.Time
+	label  string
+	err    error
+	output []byte // combined stdout+stderr from the action's shell run
 }
 
 // When satisfies the tcell.Event interface.
@@ -220,10 +221,20 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 		ca := make([]menuItemDef, 0, len(a.customActions))
 		for i := range a.customActions {
 			i := i // capture
+			// Actions with prompts open a form modal and don't depend
+			// on $FILE being set, so they stay enabled even with no
+			// tab open — Copy-from-remote is the headline case where
+			// the user opens the editor specifically to pull a file.
+			// Prompt-less actions still gate on hasFileTab because
+			// their command lines almost certainly reference $FILE.
+			enabled := (*App).hasFileTab
+			if len(a.customActions[i].Prompts) > 0 {
+				enabled = alwaysTrue
+			}
 			ca = append(ca, menuItemDef{
 				label:   a.customActions[i].Label,
 				action:  func(app *App) { app.runCustomAction(i) },
-				enabled: (*App).hasFileTab,
+				enabled: enabled,
 			})
 		}
 		// Splice in just before the final group (Quit). builtinMenuGroups
@@ -310,6 +321,15 @@ type App struct {
 	confirmHover    int
 	confirmCallback func(*App)
 
+	// confirmInfo flips the confirm modal into a single-button "OK"
+	// flavour used for reporting things back to the user — like the
+	// full stderr from a failed custom action — that don't need a
+	// Yes/No decision. confirmMessageLines, when non-nil, supersedes
+	// confirmMessage so the renderer can draw a multi-line body for
+	// scp / ssh diagnostics that naturally wrap.
+	confirmInfo         bool
+	confirmMessageLines []string
+
 	// Save/Discard/Cancel modal — used when closing a dirty tab or
 	// quitting with unsaved changes. dirtyHover indexes the button row:
 	// 0 = Cancel (safe default for an accidental Enter), 1 = Discard,
@@ -321,6 +341,21 @@ type App struct {
 	dirtyHover           int
 	dirtySaveCallback    func(*App)
 	dirtyDiscardCallback func(*App)
+
+	// Form modal — multi-field input collected before a custom action's
+	// shell command runs. See formmodal.go for layout, focus traversal,
+	// and the env-var injection that turns submitted values into KEY=
+	// pairs the spawned shell can read. Mutually exclusive with every
+	// other modal, like prompt/confirm.
+	formOpen     bool
+	formTitle    string
+	formPrompts  []customactions.Prompt
+	formValues   map[string]string // canonical store keyed by Prompt.Key
+	formText     [][]rune          // per-prompt rune slice (text rows only; nil for selects)
+	formCursor   []int             // caret position into formText[i]; index for selects
+	formScroll   []int             // horizontal scroll offset for text rows
+	formFocus    int               // which prompt row owns the keyboard
+	formCallback func(*App, map[string]string)
 
 	// Right-click context menu over the file tree.
 	contextOpen  bool
@@ -545,14 +580,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 	case *autoScrollEvent:
 		a.handleAutoScroll()
 	case *treeRefreshEvent:
-		a.tree.Refresh()
-		a.reconcileOpenTabsWithDisk()
-		a.refreshGitStatus()
-		// Refresh the finder index on the same cadence as the tree.
-		// External file changes (a teammate's pull, a CI artifact)
-		// should be visible in the finder without restarting the
-		// editor — matching what the sidebar already does.
-		a.invalidateFinder()
+		a.refreshTreeNow()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
 	case *formatDoneEvent:
@@ -567,15 +595,70 @@ func (a *App) handleEvent(ev tcell.Event) {
 	}
 }
 
+// refreshTreeNow re-runs the same refresh pipeline the 10s timer
+// fires: rescan the file tree (preserving expansion state), reconcile
+// any open tabs with disk, refresh git status, and invalidate the
+// finder index so a freshly-pulled file shows up everywhere at once.
+// Called from the periodic event and from runCustomAction's success
+// path so a Copy-from-remote action's output is visible immediately
+// instead of after the next tick.
+func (a *App) refreshTreeNow() {
+	a.tree.Refresh()
+	a.reconcileOpenTabsWithDisk()
+	a.refreshGitStatus()
+	a.invalidateFinder()
+}
+
 // handleCustomActionDone surfaces the result of an async custom-action
-// run. Success flashes a brief confirmation; failure flashes the error
-// (truncated to a status-bar-friendly length).
+// run. Success flashes a brief confirmation and forces a sidebar
+// refresh so a freshly-pulled file appears in the file tree without
+// waiting for the 10-second auto-refresh tick. Failure opens an info
+// modal with the captured stderr — the prior 1-line flash truncated
+// scp's actual diagnostics, which is exactly the case where the user
+// most needs to read them.
 func (a *App) handleCustomActionDone(e *customActionDoneEvent) {
 	if e.err != nil {
-		a.flash(fmt.Sprintf("%s failed: %v", e.label, e.err))
+		title := "Action failed: " + e.label
+		body := splitErrorOutput(e.err, e.output)
+		a.openInfo(title, body)
 		return
 	}
 	a.flash(e.label + " — done")
+	a.refreshTreeNow()
+}
+
+// splitErrorOutput formats the action's captured output for the info
+// modal: an opening line summarising the exit error, then up to a
+// handful of lines of trimmed stderr, with the actions.log path as
+// the closing line so the user knows where to find the full record.
+// Pulled out so handleCustomActionDone reads as the routing decision
+// it really is.
+func splitErrorOutput(runErr error, out []byte) []string {
+	const maxLines = 8
+	const maxLineWidth = 78
+
+	body := []string{strings.TrimSpace(runErr.Error())}
+	captured := strings.TrimRight(string(out), "\n")
+	if captured != "" {
+		body = append(body, "")
+		count := 0
+		for _, ln := range strings.Split(captured, "\n") {
+			ln = strings.TrimRight(ln, "\r")
+			if runeLen(ln) > maxLineWidth {
+				ln = string([]rune(ln)[:maxLineWidth-1]) + "…"
+			}
+			body = append(body, ln)
+			count++
+			if count >= maxLines {
+				body = append(body, "… (truncated; see actions.log)")
+				break
+			}
+		}
+	}
+	if logPath := customactions.LogPath(); logPath != "" {
+		body = append(body, "", "Full output: "+logPath)
+	}
+	return body
 }
 
 // reconcileOpenTabsWithDisk runs once per background tick. For every
@@ -766,6 +849,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleDirtyKey(ev)
 		return
 	}
+	if a.formOpen {
+		a.handleFormKey(ev)
+		return
+	}
 	if a.contextOpen {
 		a.handleContextKey(ev)
 		return
@@ -901,6 +988,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.dirtyOpen {
 		a.handleDirtyMouse(x, y, btn)
+		return
+	}
+	if a.formOpen {
+		a.handleFormMouse(x, y, btn)
 		return
 	}
 	if a.contextOpen {
@@ -1654,36 +1745,56 @@ func (a *App) menuRevert() {
 	a.flash("Reverted to on-open state — Undo to recover")
 }
 
-// runCustomAction executes the custom action at idx against the active
-// tab's file. The shell command is run via `sh -c` in a goroutine with
-// FILE (absolute path) and FILENAME (basename) exported into the
-// environment, so a slow scp or hanging ssh can't freeze the UI.
-// Completion fires a customActionDoneEvent which the main loop turns
-// into a status flash.
+// runCustomAction executes the custom action at idx. When the action
+// declares prompts, the form modal opens first and the shell command
+// runs only after the user submits — values are exported as KEY=VALUE
+// env vars named after each prompt's Key. When prompts is empty the
+// command runs immediately (the historical behaviour) and the action
+// requires an open tab so $FILE / $FILENAME aren't blank.
+//
+// Either path runs in a goroutine so a slow scp / ssh can't freeze
+// the UI; completion fires a customActionDoneEvent the main loop
+// turns into a flash on success or an info modal on failure.
 func (a *App) runCustomAction(idx int) {
 	a.closeMenu()
 	if idx < 0 || idx >= len(a.customActions) {
 		return
 	}
-	tab := a.activeTabPtr()
-	if tab == nil || tab.Path == "" {
-		a.flash("custom action: no file open")
-		return
-	}
 	act := a.customActions[idx]
 
-	abs, err := filepath.Abs(tab.Path)
-	if err != nil {
-		abs = tab.Path
+	// Prompted actions don't require an open tab — Copy-from-remote
+	// works fine with no buffer focused. The non-prompted path keeps
+	// the original guard so `$FILE` actions still flash their old
+	// "no file open" message instead of silently exporting "".
+	if len(act.Prompts) == 0 {
+		tab := a.activeTabPtr()
+		if tab == nil || tab.Path == "" {
+			a.flash("custom action: no file open")
+			return
+		}
+		a.execCustomAction(act, nil)
+		return
 	}
-	base := filepath.Base(abs)
+
+	a.openForm(act.Label, act.Prompts, func(app *App, values map[string]string) {
+		app.execCustomAction(act, values)
+	})
+}
+
+// execCustomAction is the actual shell-out. Pulled out of
+// runCustomAction so both the prompt-less and prompted paths share
+// the env-var, logging, and event-posting wiring without diverging.
+func (a *App) execCustomAction(act customactions.Action, promptValues map[string]string) {
+	vars := a.captureActionVars()
+	env := append(os.Environ(), vars.envSlice()...)
+	env = append(env, promptValuesEnv(act.Prompts, promptValues)...)
 
 	a.flash(act.Label + "…")
 	scr := a.screen
 	go func() {
 		started := time.Now()
 		cmd := exec.Command("sh", "-c", act.Command)
-		cmd.Env = append(os.Environ(), "FILE="+abs, "FILENAME="+base)
+		cmd.Env = env
 		out, runErr := cmd.CombinedOutput()
 		duration := time.Since(started)
 
@@ -1696,30 +1807,18 @@ func (a *App) runCustomAction(idx int) {
 			Duration: duration,
 			Label:    act.Label,
 			Command:  act.Command,
-			File:     abs,
-			Filename: base,
+			File:     vars.File,
+			Filename: vars.Filename,
 			ExitErr:  runErr,
 			Output:   out,
 		})
 
-		var finalErr error
-		if runErr != nil {
-			// Tack the first line of stderr/stdout onto the error so
-			// the user sees *why* it failed, not just the exit code.
-			preview := strings.TrimSpace(string(out))
-			if i := strings.IndexByte(preview, '\n'); i >= 0 {
-				preview = preview[:i]
-			}
-			if len(preview) > 80 {
-				preview = preview[:80] + "…"
-			}
-			if preview == "" {
-				finalErr = runErr
-			} else {
-				finalErr = fmt.Errorf("%v: %s", runErr, preview)
-			}
-		}
-		_ = scr.PostEvent(&customActionDoneEvent{when: time.Now(), label: act.Label, err: finalErr})
+		_ = scr.PostEvent(&customActionDoneEvent{
+			when:   time.Now(),
+			label:  act.Label,
+			err:    runErr,
+			output: out,
+		})
 	}()
 }
 
@@ -1890,6 +1989,9 @@ func (a *App) draw() {
 	}
 	if a.dirtyOpen {
 		a.drawDirtyClose()
+	}
+	if a.formOpen {
+		a.drawForm()
 	}
 	if a.finderOpen {
 		a.drawFinder()
