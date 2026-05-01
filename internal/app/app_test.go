@@ -15,6 +15,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1429,6 +1430,43 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 }
 
+// TestMenuLayout_PromptedActionEnabledWithoutFile guards the rule
+// that custom actions with prompts stay enabled even when no tab is
+// open — Copy-from-remote is the only path to bring the *first*
+// file into a fresh project, so requiring an existing tab would
+// make the feature unreachable in its primary use case.
+func TestMenuLayout_PromptedActionEnabledWithoutFile(t *testing.T) {
+	a := newTestApp(t, t.TempDir()) // no tabs opened
+
+	a.customActions = []customactions.Action{
+		{Label: "Plain", Command: "echo p"}, // requires a file
+		{Label: "Prompted", Command: "echo q",
+			Prompts: []customactions.Prompt{
+				{Key: "X", Type: customactions.PromptText},
+			}},
+	}
+	items, _, _ := a.menuLayout()
+
+	var plain, prompted *menuItemDef
+	for i := range items {
+		switch items[i].label {
+		case "Plain":
+			plain = &items[i]
+		case "Prompted":
+			prompted = &items[i]
+		}
+	}
+	if plain == nil || prompted == nil {
+		t.Fatalf("custom actions missing from layout: %v", items)
+	}
+	if plain.enabled(a) {
+		t.Error("plain action should be disabled with no tab open")
+	}
+	if !prompted.enabled(a) {
+		t.Error("prompted action should be enabled even with no tab open")
+	}
+}
+
 // TestRunCustomAction_NoFileFlashes covers the guard that prevents a
 // user from running an action with no file open — the menu would
 // disable the row in that case, but defence-in-depth here matters
@@ -1507,5 +1545,171 @@ func TestRunCustomAction_ExecutesAndPostsEvent(t *testing.T) {
 	want := target + "|" + "src.txt"
 	if string(got) != want {
 		t.Fatalf("marker content = %q, want %q", got, want)
+	}
+}
+
+// TestRunCustomAction_PromptedSkipsNoFileGuard ensures actions that
+// declare prompts can run even when no tab is open. Copy-from-remote
+// is the motivating case — without this, the very first thing the
+// user wants to do in a fresh session would silently flash "no file
+// open" and refuse to show the form.
+func TestRunCustomAction_PromptedSkipsNoFileGuard(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.customActions = []customactions.Action{{
+		Label:   "Copy from remote",
+		Command: "true",
+		Prompts: []customactions.Prompt{
+			{Key: "HOST", Type: customactions.PromptSelect, Options: []string{"a", "b"}},
+		},
+	}}
+	a.runCustomAction(0)
+
+	if !a.formOpen {
+		t.Fatal("prompted action with no file open should still show the form modal")
+	}
+	if strings.Contains(a.statusMsg, "no file open") {
+		t.Errorf("prompted action should not flash no-file-open: %q", a.statusMsg)
+	}
+}
+
+// TestRunCustomAction_PromptedExportsValuesAndExpands walks the full
+// SCP-from-remote path: the form opens, we fill it in, submit, and
+// assert the spawned shell saw both the form-collected env vars
+// (HOST, REMOTE_SRC) and the editor-state vars (PROJECT_ROOT). This
+// is the contract that makes the feature actually useful — if any of
+// these don't reach the shell, the user's command fails silently.
+func TestRunCustomAction_PromptedExportsValuesAndExpands(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	a := newTestApp(t, dir)
+	a.customActions = []customactions.Action{{
+		Label:   "Copy from remote",
+		Command: `printf "%s|%s|%s" "$HOST" "$REMOTE_SRC" "$PROJECT_ROOT" > ` + marker,
+		Prompts: []customactions.Prompt{
+			{Key: "HOST", Type: customactions.PromptSelect, Options: []string{"cascade", "rager"}},
+			{Key: "REMOTE_SRC", Type: customactions.PromptText},
+		},
+	}}
+
+	a.runCustomAction(0)
+	if !a.formOpen {
+		t.Fatal("form did not open")
+	}
+
+	// Fill in REMOTE_SRC by typing into the focused field after Tab'ing
+	// past the HOST select.
+	a.handleFormKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	for _, r := range "/etc/hosts" {
+		a.handleFormKey(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	a.handleFormKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if a.formOpen {
+		t.Fatal("Enter on last field should submit")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ev := a.screen.PollEvent()
+		if ev == nil {
+			break
+		}
+		if _, ok := ev.(*customActionDoneEvent); ok {
+			break
+		}
+	}
+
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker read: %v", err)
+	}
+	parts := strings.Split(string(got), "|")
+	if len(parts) != 3 {
+		t.Fatalf("marker = %q, want HOST|REMOTE_SRC|PROJECT_ROOT", got)
+	}
+	if parts[0] != "cascade" {
+		t.Errorf("HOST = %q, want %q", parts[0], "cascade")
+	}
+	if parts[1] != "/etc/hosts" {
+		t.Errorf("REMOTE_SRC = %q, want %q", parts[1], "/etc/hosts")
+	}
+	if !strings.HasSuffix(parts[2], filepath.Base(dir)) {
+		t.Errorf("PROJECT_ROOT = %q, want suffix matching tempdir", parts[2])
+	}
+}
+
+// TestHandleCustomActionDone_FailureOpensInfoModal pins the error
+// reporting upgrade. The pre-fix behaviour was a one-line status
+// flash that truncated scp's stderr exactly when the user most
+// needed to read it. Now failures route into the info modal so the
+// stderr lines stay visible until dismissed.
+func TestHandleCustomActionDone_FailureOpensInfoModal(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.handleCustomActionDone(&customActionDoneEvent{
+		label:  "Copy from remote",
+		err:    fmt.Errorf("exit status 1"),
+		output: []byte("scp: /etc/missing: No such file or directory\n"),
+	})
+	if !a.confirmOpen || !a.confirmInfo {
+		t.Fatal("info modal should be open")
+	}
+	joined := strings.Join(a.confirmMessageLines, "\n")
+	if !strings.Contains(joined, "scp:") || !strings.Contains(joined, "missing") {
+		t.Errorf("info body missing stderr preview: %q", joined)
+	}
+	if !strings.Contains(a.confirmTitle, "Copy from remote") {
+		t.Errorf("title = %q, want it to mention the action label", a.confirmTitle)
+	}
+}
+
+// TestHandleCustomActionDone_SuccessRefreshesTree confirms a
+// successful action triggers an immediate tree refresh so a
+// freshly-pulled file appears without waiting on the 10-second
+// auto-refresh tick. Pinning this avoids a regression where a user
+// runs Copy-from-remote, sees "done", and then has to pause before
+// the new file becomes clickable in the sidebar.
+func TestHandleCustomActionDone_SuccessRefreshesTree(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	// Drop a file directly on disk that the tree hasn't seen yet —
+	// without an explicit refresh it would only show up on the next
+	// 10-second tick.
+	newFile := filepath.Join(dir, "fresh.txt")
+	if err := os.WriteFile(newFile, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	beforeChildren := len(a.tree.Root.Children)
+	a.handleCustomActionDone(&customActionDoneEvent{label: "X"})
+	if got := len(a.tree.Root.Children); got <= beforeChildren {
+		t.Errorf("tree was not refreshed: %d → %d children", beforeChildren, got)
+	}
+}
+
+// TestSplitErrorOutput_TruncatesAndAppendsLogPath nails the body
+// the info modal renders on failure. Without truncation a runaway
+// scp -v dump would push the dialog off-screen; without the actions.log
+// pointer the user can't easily get the full version even though
+// we're already writing it.
+func TestSplitErrorOutput_TruncatesAndAppendsLogPath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/tmp/xdgtest")
+
+	long := strings.Repeat("really long line that exceeds eighty cells ", 4)
+	out := []byte(long + "\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\n")
+	body := splitErrorOutput(fmt.Errorf("exit 1"), out)
+
+	if body[0] != "exit 1" {
+		t.Errorf("body[0] = %q, want exit-error summary", body[0])
+	}
+	last := body[len(body)-1]
+	if !strings.Contains(last, "actions.log") {
+		t.Errorf("last line = %q, want actions.log pointer", last)
+	}
+	for _, ln := range body {
+		if runeLen(ln) > 80 {
+			t.Errorf("line over 80 cells: %q (len=%d)", ln, runeLen(ln))
+		}
+	}
+	if !strings.Contains(strings.Join(body, "\n"), "truncated") {
+		t.Error("expected '… truncated' marker for >maxLines output")
 	}
 }

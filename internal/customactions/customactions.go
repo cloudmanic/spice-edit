@@ -19,15 +19,32 @@
 //	  "actions": [
 //	    {"label": "Open on Rager",
 //	     "command": "scp \"$FILE\" rager:~/Downloads/ && ssh rager open ~/Downloads/\"$FILENAME\""},
-//	    {"label": "Open on Cascade",
-//	     "command": "scp \"$FILE\" cascade:~/Downloads/ && ssh cascade open ~/Downloads/\"$FILENAME\""}
+//	    {"label": "Copy from remote",
+//	     "prompts": [
+//	       {"key": "HOST",       "label": "Host", "type": "select",
+//	        "options": ["cascade", "rager"]},
+//	       {"key": "DEST_DIR",   "label": "Local destination",
+//	        "type": "text", "default": "${ACTIVE_FOLDER}"},
+//	       {"key": "REMOTE_SRC", "label": "Remote file", "type": "text"}
+//	     ],
+//	     "command": "scp \"$HOST:$REMOTE_SRC\" \"$DEST_DIR/\""}
 //	  ]
 //	}
 //
-// Two env vars are exported when the command runs:
+// When prompts is non-empty the editor opens a small form modal before
+// running the command. Each prompt's value is exported as an env var
+// named after Key. Defaults can include the editor-state variables
+// listed below — they get expanded when the modal opens.
 //
-//	FILE      — absolute path of the active tab's file
-//	FILENAME  — basename of the same file
+// Editor-state env vars exported on every action run:
+//
+//	FILE                — absolute path of the active tab's file (if any)
+//	FILENAME            — basename of FILE
+//	PROJECT_ROOT        — absolute path of the project root
+//	ACTIVE_FOLDER       — absolute path of the sidebar's active folder
+//	ACTIVE_FOLDER_REL   — same, relative to PROJECT_ROOT
+//	CURRENT_FILE        — alias of FILE for prompt-default symmetry
+//	CURRENT_FILE_REL    — FILE relative to PROJECT_ROOT
 //
 // Anything else the user wants from the environment they can pull in
 // themselves (`$HOME`, `$USER`, etc.) — we just run `sh -c` and
@@ -47,19 +64,55 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 // Action is one row that will appear in the menu modal. Label is the
 // human-readable text the user clicks; Command is what we hand to
-// `sh -c` when they do. We keep both as plain strings — no template
-// pre-parsing — because shell expansion against $FILE / $FILENAME
-// happens inside the spawned shell, not here.
+// `sh -c` when they do. Prompts is an optional list of input fields
+// the editor collects from the user before running Command — each
+// field's value is exported as an env var the shell can read.
+//
+// We keep Command as a plain string (no template pre-parsing) because
+// shell expansion against $HOST / $FILE / $FILENAME happens inside
+// the spawned shell, which both keeps the loader simple and avoids
+// re-implementing shell quoting in Go.
 type Action struct {
-	Label   string `json:"label"`
-	Command string `json:"command"`
+	Label   string   `json:"label"`
+	Command string   `json:"command"`
+	Prompts []Prompt `json:"prompts,omitempty"`
 }
+
+// PromptType is the input widget the form modal renders for a Prompt.
+// Two flavours for now — text for free-form strings, select for a
+// fixed option list — so the schema's validation surface stays small.
+type PromptType string
+
+const (
+	PromptText   PromptType = "text"
+	PromptSelect PromptType = "select"
+)
+
+// Prompt is one field in a form modal. Key becomes the env var name
+// the shell command reads; Label is the human-readable row title;
+// Default seeds the field on open and may include editor-state
+// variables like ${ACTIVE_FOLDER}, expanded by the caller before the
+// modal renders. Options is required iff Type == PromptSelect.
+type Prompt struct {
+	Key     string     `json:"key"`
+	Label   string     `json:"label"`
+	Type    PromptType `json:"type"`
+	Options []string   `json:"options,omitempty"`
+	Default string     `json:"default,omitempty"`
+}
+
+// validKeyRE matches the env-var-safe identifier shape we require for
+// Prompt.Key: an uppercase letter or underscore, then any number of
+// uppercase letters / digits / underscores. This lines up with what
+// POSIX shells will reliably read back as `$KEY` without surprises.
+var validKeyRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // fileFormat mirrors the on-disk JSON shape. Wrapped in a struct (vs
 // a bare array) so we can grow new top-level keys later without
@@ -95,6 +148,15 @@ func DefaultPath() string {
 //     a blank label or command    → dropped silently. We'd rather
 //     skip a half-written entry
 //     than refuse the whole file.
+//   - An action whose Prompts list
+//     is malformed                → returns an error naming the
+//                                    offending action's label so the
+//                                    user can find it in the file.
+//                                    Prompts are too easy to typo and
+//                                    too dangerous to silently skip
+//                                    (a missing select option means
+//                                    the user can never submit the
+//                                    form), so this one we surface.
 func Load(path string) ([]Action, error) {
 	if path == "" {
 		return nil, nil
@@ -122,12 +184,60 @@ func Load(path string) ([]Action, error) {
 		if a.Label == "" || a.Command == "" {
 			continue
 		}
+		if err := validatePrompts(a.Label, a.Prompts); err != nil {
+			return nil, err
+		}
 		out = append(out, a)
 	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// validatePrompts checks an action's prompt list for the rules the
+// form modal and the env-var injection layer rely on:
+//
+//   - Every Key must match validKeyRE so the shell can read it back
+//     as $KEY without quoting surprises.
+//   - No two prompts in the same action may share a Key — last-write
+//     wins on the env var, but the user clearly meant something
+//     different so this is almost certainly a typo.
+//   - Type must be one of the recognised constants. An unknown type
+//     would render as a blank row the user can't fill in.
+//   - Select prompts need at least one option, otherwise the user
+//     has nothing to pick and the form can never submit.
+//
+// Errors quote the action's Label so the user can grep their config.
+func validatePrompts(actionLabel string, prompts []Prompt) error {
+	if len(prompts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(prompts))
+	for i, p := range prompts {
+		if !validKeyRE.MatchString(p.Key) {
+			return fmt.Errorf("action %q prompt[%d]: key %q must match [A-Z_][A-Z0-9_]*",
+				actionLabel, i, p.Key)
+		}
+		if _, dup := seen[p.Key]; dup {
+			return fmt.Errorf("action %q: duplicate prompt key %q",
+				actionLabel, p.Key)
+		}
+		seen[p.Key] = struct{}{}
+		switch p.Type {
+		case PromptText:
+			// nothing to check — Default may be empty.
+		case PromptSelect:
+			if len(p.Options) == 0 {
+				return fmt.Errorf("action %q prompt[%d] (%q): select needs at least one option",
+					actionLabel, i, p.Key)
+			}
+		default:
+			return fmt.Errorf("action %q prompt[%d] (%q): unknown type %q (want %q or %q)",
+				actionLabel, i, p.Key, p.Type, PromptText, PromptSelect)
+		}
+	}
+	return nil
 }
 
 // LogPath returns the canonical log location:

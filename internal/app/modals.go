@@ -56,6 +56,7 @@ func (a *App) closeAllModals() {
 	a.confirmOpen = false
 	a.contextOpen = false
 	a.dirtyOpen = false
+	a.formOpen = false
 	a.findOpen = false
 	a.finderOpen = false
 	a.findValue = nil
@@ -68,6 +69,14 @@ func (a *App) closeAllModals() {
 	a.confirmCallback = nil
 	a.dirtySaveCallback = nil
 	a.dirtyDiscardCallback = nil
+	a.formPrompts = nil
+	a.formValues = nil
+	a.formText = nil
+	a.formCursor = nil
+	a.formScroll = nil
+	a.formCallback = nil
+	a.confirmInfo = false
+	a.confirmMessageLines = nil
 	// confirmCancelHook is parked here so an unrelated confirm modal
 	// opened after a format-trust / format-install prompt can't
 	// accidentally inherit the cancel hook. The flows that need a
@@ -85,7 +94,7 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.findOpen || a.finderOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.formOpen || a.findOpen || a.finderOpen
 }
 
 // -----------------------------------------------------------------------------
@@ -338,6 +347,24 @@ func (a *App) openConfirm(title, message string, callback func(*App)) {
 	a.confirmCallback = callback
 }
 
+// openInfo flips the confirm modal into single-button "OK" flavour for
+// passive reporting — most importantly, the full stderr from a failed
+// custom action where the status-bar flash isn't enough room. Lines is
+// drawn one row per entry inside the modal body. Empty input falls
+// back to a single "(no output captured)" line so the dialog never
+// looks broken.
+func (a *App) openInfo(title string, lines []string) {
+	a.closeAllModals()
+	if len(lines) == 0 {
+		lines = []string{"(no output captured)"}
+	}
+	a.confirmOpen = true
+	a.confirmInfo = true
+	a.confirmTitle = title
+	a.confirmMessageLines = lines
+	a.confirmHover = 0
+}
+
 // confirmYes runs the confirm callback and closes the modal.
 func (a *App) confirmYes() {
 	if !a.confirmOpen {
@@ -368,6 +395,17 @@ func (a *App) confirmCancel() {
 // Left / Right toggle focus between [No] and [Yes]; Enter activates the
 // focused button; Esc cancels.
 func (a *App) handleConfirmKey(ev *tcell.EventKey) {
+	if a.confirmInfo {
+		// Info modal has only one button. Any "I'm done" key dismisses;
+		// cycling between buttons doesn't apply because there's only
+		// one. Routed early so Tab / arrow keys can't accidentally
+		// flip confirmHover into a state drawConfirm wouldn't render.
+		switch ev.Key() {
+		case tcell.KeyEsc, tcell.KeyEnter, tcell.KeyTab:
+			a.closeAllModals()
+		}
+		return
+	}
 	switch ev.Key() {
 	case tcell.KeyEsc:
 		a.confirmCancel()
@@ -394,6 +432,23 @@ func (a *App) handleConfirmKey(ev *tcell.EventKey) {
 // cancel.
 func (a *App) handleConfirmMouse(x, y int, btn tcell.ButtonMask) {
 	mx, my, mw, mh := a.confirmModalRect()
+	if a.confirmInfo {
+		// Single OK button at row mh-3, centered. Outside the modal
+		// dismisses too — same convention as the rest of the modals.
+		if btn&tcell.Button1 == 0 {
+			return
+		}
+		if x < mx || x >= mx+mw || y < my || y >= my+mh {
+			a.closeAllModals()
+			return
+		}
+		btnY := my + mh - 3
+		btnX := mx + (mw-10)/2
+		if y == btnY && x >= btnX && x < btnX+10 {
+			a.closeAllModals()
+		}
+		return
+	}
 	if x >= mx && x < mx+mw && y == my+5 {
 		relX := x - mx
 		switch {
@@ -424,10 +479,24 @@ func (a *App) handleConfirmMouse(x, y int, btn tcell.ButtonMask) {
 }
 
 // confirmModalRect returns the on-screen rectangle of the confirm modal,
-// centered in the window.
+// centered in the window. In info mode the modal grows wider so a
+// command's stderr lines fit without aggressive truncation, and taller
+// to fit the line list — the chrome (border, title, divider, button
+// row) takes 6 rows on top of the body.
 func (a *App) confirmModalRect() (x, y, w, h int) {
 	w = confirmModalWidth
 	h = confirmModalHeight
+	if a.confirmInfo {
+		w = 84
+		bodyRows := len(a.confirmMessageLines)
+		if bodyRows < 1 {
+			bodyRows = 1
+		}
+		// Chrome budget: top border + title + divider + blank + button + blank + bottom = 7,
+		// but we want at least one blank between body and button. Match
+		// the layout in drawConfirm so this stays in lockstep.
+		h = bodyRows + 7
+	}
 	x = (a.width - w) / 2
 	y = (a.height - h) / 2
 	if x < 0 {
@@ -469,6 +538,24 @@ func (a *App) drawConfirm() {
 	drawAt(a.screen, mx+1, my+1, " "+a.confirmTitle, titleStyle)
 	hint := "esc "
 	drawAt(a.screen, mx+mw-1-runeLen(hint), my+1, hint, mutedStyle)
+
+	if a.confirmInfo {
+		// Info mode: left-aligned multi-line body + a single centered
+		// OK button. The body is left-aligned because scp/ssh stderr
+		// usually starts with file paths that read poorly when
+		// centered.
+		for i, line := range a.confirmMessageLines {
+			if runeLen(line) > mw-4 {
+				line = string([]rune(line)[:mw-4])
+			}
+			drawAt(a.screen, mx+2, my+3+i, line, bodyStyle)
+		}
+		btnY := my + mh - 3
+		btnX := mx + (mw-10)/2
+		drawButton(a.screen, btnX, btnY, "[  OK  ]", bg, a.theme.Accent, true)
+		a.screen.HideCursor()
+		return
+	}
 
 	// Message — centered, truncated if too long.
 	msg := a.confirmMessage

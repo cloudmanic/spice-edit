@@ -87,6 +87,131 @@ func TestLoad_HappyPath(t *testing.T) {
 	}
 }
 
+// TestLoad_HappyPathWithPrompts walks the form-driven action shape:
+// a Copy-from-remote action with a select host, a defaulted local
+// destination, and a remote-source text field. Pins that prompts
+// survive the round-trip in declaration order so the form modal
+// renders fields in the same order the user wrote them.
+func TestLoad_HappyPathWithPrompts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.json")
+	const body = `{
+	  "actions": [
+	    {
+	      "label": "Copy from remote",
+	      "prompts": [
+	        {"key": "HOST",       "label": "Host",
+	         "type": "select", "options": ["cascade", "rager"]},
+	        {"key": "DEST_DIR",   "label": "Local destination",
+	         "type": "text", "default": "${ACTIVE_FOLDER}"},
+	        {"key": "REMOTE_SRC", "label": "Remote file", "type": "text"}
+	      ],
+	      "command": "scp \"$HOST:$REMOTE_SRC\" \"$DEST_DIR/\""
+	    }
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Prompts) != 3 {
+		t.Fatalf("got %+v, want 1 action with 3 prompts", got)
+	}
+	if got[0].Prompts[0].Type != PromptSelect ||
+		len(got[0].Prompts[0].Options) != 2 {
+		t.Errorf("HOST prompt malformed: %+v", got[0].Prompts[0])
+	}
+	if got[0].Prompts[1].Default != "${ACTIVE_FOLDER}" {
+		t.Errorf("DEST_DIR default lost: %q", got[0].Prompts[1].Default)
+	}
+}
+
+// TestLoad_RejectsBadPromptKey enforces the env-var-safe shape on
+// Prompt.Key. A lowercase or punctuation-laden key would either fail
+// to read back as $KEY in the shell or silently shadow nothing — the
+// user wants a typo to surface, not to silently misbehave at runtime.
+func TestLoad_RejectsBadPromptKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.json")
+	const body = `{
+	  "actions": [
+	    {"label": "X", "command": "echo $foo",
+	     "prompts": [{"key": "foo-bar", "label": "F", "type": "text"}]}
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "foo-bar") {
+		t.Fatalf("err = %v, want error mentioning foo-bar", err)
+	}
+}
+
+// TestLoad_RejectsDuplicatePromptKey catches the easy mistake of
+// pasting two HOST rows. The second would silently overwrite the
+// first's env var; better to refuse to load and tell the user.
+func TestLoad_RejectsDuplicatePromptKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.json")
+	const body = `{
+	  "actions": [
+	    {"label": "X", "command": "echo $HOST",
+	     "prompts": [
+	       {"key": "HOST", "label": "A", "type": "text"},
+	       {"key": "HOST", "label": "B", "type": "text"}
+	     ]}
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("err = %v, want duplicate-key error", err)
+	}
+}
+
+// TestLoad_RejectsSelectWithoutOptions guards against a select prompt
+// the user can never resolve — without options there's nothing to
+// pick, and the form modal would refuse to submit forever.
+func TestLoad_RejectsSelectWithoutOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.json")
+	const body = `{
+	  "actions": [
+	    {"label": "X", "command": "echo $HOST",
+	     "prompts": [{"key": "HOST", "label": "Host", "type": "select"}]}
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "option") {
+		t.Fatalf("err = %v, want options error", err)
+	}
+}
+
+// TestLoad_RejectsUnknownPromptType pins the closed-set rule on
+// Type. A typo'd "selct" or "input" would render as a blank row the
+// user can't fill in, so this is loud-fail territory.
+func TestLoad_RejectsUnknownPromptType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.json")
+	const body = `{
+	  "actions": [
+	    {"label": "X", "command": "echo $HOST",
+	     "prompts": [{"key": "HOST", "label": "Host", "type": "selct"}]}
+	  ]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "selct") {
+		t.Fatalf("err = %v, want unknown-type error", err)
+	}
+}
+
 // TestLoad_DropsBlankEntries confirms half-written entries are
 // silently skipped — users editing the file shouldn't see the rest
 // of their actions vanish because one row is mid-edit.
