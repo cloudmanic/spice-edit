@@ -23,6 +23,12 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual escape hatch. If a merge commit accidentally carries a
+  # skip-CI marker (or anything else suppresses the auto-trigger),
+  # we can rerun the release flow against the current main without
+  # needing an empty no-op commit. Bumps, tags, and dispatches Pages
+  # exactly the same as a normal push trigger.
+  workflow_dispatch:
 
 # Pushes back to main need write access to the repo's contents. The
 # `actions: write` scope lets the final step kick off the Pages
