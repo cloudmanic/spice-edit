@@ -7,7 +7,7 @@
 {{ $brewUpdate := "brew update\nbrew upgrade cloudmanic/spice-edit/spice-edit" }}
 {{ $brewUninstall := "brew uninstall cloudmanic/spice-edit/spice-edit\nbrew untap cloudmanic/spice-edit" }}
 {{ $linuxInstall := "curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | sh" }}
-{{ $linuxPin := "curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | VERSION=v0.0.23 sh" }}
+{{ $linuxPin := printf "curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | VERSION=%s sh" site.Params.version }}
 {{ $linuxDir := "curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | INSTALL_DIR=/opt/bin sh" }}
 {{ $sourceInstall := "git clone https://github.com/cloudmanic/spice-edit.git\ncd spice-edit\nmake install" }}
 

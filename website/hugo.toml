@@ -25,7 +25,11 @@ disableKinds = ["taxonomy", "term"]
   brew_tap = "cloudmanic/spice-edit"
   install_script_url = "https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh"
   releases_url = "https://github.com/cloudmanic/spice-edit/releases"
-  version = "v0.0.23"
+  # The Pages workflow rewrites this from internal/version/version.go on
+  # every deploy, so it stays in lockstep with the published binary.
+  # Bump this manually if you want a fresh local build to display the
+  # current version without running CI.
+  version = "v0.0.25"
   ogImage = "/og-image.png"
 
 [outputs]

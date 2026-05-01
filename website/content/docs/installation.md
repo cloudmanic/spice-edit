@@ -46,8 +46,8 @@ The script detects your OS and architecture (`linux/amd64`, `linux/arm64`, `darw
 It's plain POSIX `sh` — no bash, no curl-isms. It needs `tar` and one of `curl` or `wget`. Override behavior with environment variables:
 
 ```sh
-# Pin a specific version.
-curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | VERSION=v0.0.23 sh
+# Pin a specific version (any tag from the Releases page).
+curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | VERSION=vX.Y.Z sh
 
 # Install to a custom directory.
 curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | INSTALL_DIR=/opt/bin sh
@@ -58,9 +58,9 @@ curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.
 If you don't trust pipe-to-sh, grab the archive yourself from the [GitHub Releases](https://github.com/cloudmanic/spice-edit/releases) page:
 
 ```sh
-# Replace VERSION and ARCH (amd64 or arm64) to taste.
-curl -L -O https://github.com/cloudmanic/spice-edit/releases/download/v0.0.23/spiceedit_0.0.23_linux_amd64.tar.gz
-tar -xzf spiceedit_0.0.23_linux_amd64.tar.gz
+# Replace X.Y.Z and ARCH (amd64 or arm64) to taste — pick a tag from the Releases page.
+curl -L -O https://github.com/cloudmanic/spice-edit/releases/download/vX.Y.Z/spiceedit_X.Y.Z_linux_amd64.tar.gz
+tar -xzf spiceedit_X.Y.Z_linux_amd64.tar.gz
 mv spiceedit ~/.local/bin/
 ```
 

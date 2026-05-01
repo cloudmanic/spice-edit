@@ -18,6 +18,10 @@ on:
     paths:
       - "website/**"
       - ".github/workflows/pages.yml"
+      # The release workflow bumps internal/version/version.go on every
+      # release. Re-deploy the site so the displayed version stays in
+      # lockstep with what users actually install.
+      - "internal/version/version.go"
   workflow_dispatch:
 
 # GITHUB_TOKEN scopes Pages needs. Read for checkout, write for the Pages
@@ -58,6 +62,23 @@ jobs:
 
       - name: Install npm deps
         run: npm ci
+
+      # Sync the version param in hugo.toml from the canonical source
+      # at internal/version/version.go. The Go file is what release CI
+      # bumps on every release; keeping the website in lockstep means
+      # the badge in the header / footer never goes stale.
+      - name: Sync version from Go source
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -nE 's/.*const Version = "([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' internal/version/version.go)
+          if [[ -z "$VERSION" ]]; then
+            echo "Could not parse version from internal/version/version.go" >&2
+            exit 1
+          fi
+          echo "Setting website version to v$VERSION"
+          sed -i -E "s/^(  version = )\"[^\"]*\"/\1\"v$VERSION\"/" website/hugo.toml
+          grep '^  version = ' website/hugo.toml
 
       - name: Build Tailwind CSS
         run: npm run build:css
