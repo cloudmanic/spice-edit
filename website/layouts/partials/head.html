@@ -1,0 +1,49 @@
+{{- $title := .Title -}}
+{{- if .IsHome -}}
+  {{- $title = "SpiceEdit — Mouse-First Terminal Code Editor" -}}
+{{- else if .Params.metaTitle -}}
+  {{- $title = .Params.metaTitle -}}
+{{- else -}}
+  {{- $title = printf "%s — SpiceEdit" .Title -}}
+{{- end -}}
+{{- $desc := .Params.metaDescription | default .Params.description | default site.Params.description -}}
+<meta charset="UTF-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#1a1b26" />
+<meta name="color-scheme" content="dark" />
+
+<title>{{ $title }}</title>
+<meta name="description" content="{{ $desc }}" />
+
+<link rel="canonical" href="{{ .Permalink }}" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="alternate" type="application/rss+xml" title="SpiceEdit Blog" href="/feed.xml" />
+
+{{/* Open Graph + Twitter card */}}
+<meta property="og:type" content="website" />
+<meta property="og:title" content="{{ $title }}" />
+<meta property="og:description" content="{{ $desc }}" />
+<meta property="og:url" content="{{ .Permalink }}" />
+<meta property="og:site_name" content="SpiceEdit" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="{{ $title }}" />
+<meta name="twitter:description" content="{{ $desc }}" />
+
+{{/* Fonts: Inter + JetBrains Mono via Google Fonts CSS, swap so it's not blocking. */}}
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+  media="print"
+  onload="this.media='all'"
+/>
+<noscript>
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+  />
+</noscript>
+
+<link rel="stylesheet" href="/css/site.css" />

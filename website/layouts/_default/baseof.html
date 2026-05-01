@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en" data-os="unknown">
+<head>
+  {{ partial "head.html" . }}
+  {{ block "head" . }}{{ end }}
+</head>
+<body>
+  {{ partial "header.html" . }}
+
+  <main id="main">
+    {{ block "main" . }}{{ end }}
+  </main>
+
+  {{ partial "footer.html" . }}
+
+  {{ $osJS := resources.Get "js/os-detect.js" | resources.Minify | resources.Fingerprint }}
+  {{ $copyJS := resources.Get "js/copy-button.js" | resources.Minify | resources.Fingerprint }}
+  {{ $siteJS := resources.Get "js/site.js" | resources.Minify | resources.Fingerprint }}
+  <script src="{{ $osJS.RelPermalink }}" defer></script>
+  <script src="{{ $copyJS.RelPermalink }}" defer></script>
+  <script src="{{ $siteJS.RelPermalink }}" defer></script>
+</body>
+</html>

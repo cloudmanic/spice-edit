@@ -1,0 +1,15 @@
+# Hugo build output
+public/
+resources/_gen/
+.hugo_build.lock
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Tailwind output (generated from source)
+static/css/site.css
+
+# OS
+.DS_Store
+Thumbs.db

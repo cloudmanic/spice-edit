@@ -1,0 +1,321 @@
+{{ define "main" }}
+
+{{/* ----------------------------- HERO ----------------------------- */}}
+<section class="relative pt-16 sm:pt-20 lg:pt-28 pb-16 lg:pb-24 overflow-hidden">
+  <div class="halo" aria-hidden="true"></div>
+  <div class="container-page relative">
+    <div class="max-w-3xl">
+      <span class="badge mb-6">
+        <span class="badge-dot" aria-hidden="true"></span>
+        {{ site.Params.version }} — latest release
+      </span>
+      <h1 class="text-balance font-semibold text-4xl sm:text-5xl lg:text-7xl leading-[1.05] tracking-tight"
+          style="color: #fff;">
+        <span class="block sm:inline">The terminal editor</span>
+        <span class="block sm:inline">for the AI era.</span>
+      </h1>
+      <p class="mt-6 text-lg sm:text-xl leading-relaxed max-w-2xl"
+         style="color: var(--color-text-soft);">
+        SpiceEdit is a mouse-first code editor for SSH workflows. Click a file, tweak a line,
+        save, and get back to your agents.
+      </p>
+      <p class="mt-3 text-sm italic max-w-xl" style="color: var(--color-muted);">
+        For engineers who live in tmux — a code editor without the four-thousand-line vimrc.
+      </p>
+
+      {{/* Hero CTAs: install pill + GitHub */}}
+      <div class="mt-8 flex flex-col sm:flex-row gap-3 sm:items-center sm:gap-4">
+        <div class="install-pill" style="max-width: 100%;">
+          <span class="prompt" aria-hidden="true">$</span>
+          <span class="cmd" id="hero-install-cmd">brew install cloudmanic/spice-edit/spice-edit</span>
+          <button
+            type="button"
+            class="copy-btn"
+            data-copy="brew install cloudmanic/spice-edit/spice-edit"
+            data-copy-label="Copy install command"
+            data-copy-toast="Install command copied. Paste in your terminal."
+            aria-label="Copy install command"
+            title="Click to copy"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4.5" y="4.5" width="8" height="9" rx="1.5"/>
+              <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/>
+            </svg>
+          </button>
+        </div>
+
+        <a href="{{ site.Params.github_url }}" target="_blank" rel="noopener" class="btn btn-secondary">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <p class="mt-3 text-xs" style="color: var(--color-muted);">
+        Mac &amp; Linux install. Windows? <a href="/#install" style="color: var(--color-accent);">See all platforms</a>.
+      </p>
+    </div>
+
+    {{/* Editor screenshot placeholder */}}
+    <div class="mt-14 lg:mt-20 reveal">
+      <div class="mock-window">
+        <div class="titlebar">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="dot" aria-hidden="true"></span>
+          <span class="dot" aria-hidden="true"></span>
+          <span class="label">spiceedit ~/code/api</span>
+        </div>
+        <div class="screenshot-placeholder screenshot-aspect-hero">
+          <span class="label">[screenshot: editor-hero]</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{{/* --------------------------- THE PITCH --------------------------- */}}
+<section class="py-16 lg:py-24">
+  <div class="container-page reveal">
+    <div class="max-w-3xl">
+      <span class="section-eyebrow">The pitch</span>
+      <h2 class="section-title">Agents write the code now.<br/>The editor's job changed.</h2>
+    </div>
+    <div class="mt-10 grid gap-6 lg:grid-cols-2 lg:gap-12 max-w-5xl">
+      <p class="text-base lg:text-lg leading-relaxed" style="color: var(--color-text-soft);">
+        You used to spend eight hours a day in your editor. You memorized the hotkeys because you had to.
+        A vim cheatsheet on the wall paid for itself in a week. Then 2025 happened. Most of the code in
+        your repo this morning came out of an agent. You read diffs, you tweak prompts, you nudge a
+        function name, you save. You spend ten minutes in your editor and ten hours in your terminal.
+      </p>
+      <p class="text-base lg:text-lg leading-relaxed" style="color: var(--color-text-soft);">
+        A tool you touch for ten minutes shouldn't ask you to study for it. SpiceEdit doesn't. It runs
+        inside any terminal, looks like a tiny VS Code, and works with the mouse. Click a file in the
+        tree. Drag to select. Scroll wheel scrolls. Drop the splitter where you want it. Open the menu,
+        pick Save, get out. There is no vimrc, no plugin manager, no YAML directory. There is one static
+        binary. Drop it on a server. Run it.
+      </p>
+      <p class="lg:col-span-2 text-base lg:text-lg leading-relaxed" style="color: var(--color-text-soft);">
+        SpiceEdit was built for the workflow nobody else solves: SSH into a remote box, attach to tmux
+        or Zellij, edit files like a human, copy text back to your laptop's clipboard through three
+        layers of network. It runs over SSH because that's where work happens now. It avoids
+        <code class="px-1 py-0.5 rounded text-sm" style="background: var(--color-surface); color: var(--color-accent-soft); border: 1px solid var(--color-subtle);">Ctrl+</code>
+        shortcuts because they fight tmux and the terminal itself. It opts into formatters per-project,
+        so cloning a stranger's repo never silently runs anything. It ships under MIT. Install it.
+        Forget it. Edit a file.
+      </p>
+    </div>
+  </div>
+</section>
+
+{{/* ------------------------- COMPARISON ----------------------------- */}}
+<section class="py-16 lg:py-24" style="background: linear-gradient(180deg, transparent, rgba(122,162,247,0.03), transparent);">
+  <div class="container-page reveal">
+    <div class="max-w-3xl">
+      <span class="section-eyebrow">Why not Neovim or VS Code</span>
+      <h2 class="section-title">Use the right tool for the job.</h2>
+      <p class="section-subtitle">
+        Neovim is a beautiful editor. VS Code is a beautiful editor. Both are heavier than the job
+        most engineers ask of an editor in 2026. Use whichever fits the work in front of you.
+      </p>
+    </div>
+
+    {{/* Desktop comparison table */}}
+    <div class="mt-12 hidden md:block">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>Axis</th>
+            <th class="col-spice">SpiceEdit</th>
+            <th>Neovim</th>
+            <th>VS Code</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-axis">Setup time</td>
+            <td class="col-spice">Install, run.</td>
+            <td class="col-other">Hours-to-weeks of config.</td>
+            <td class="col-other">Minutes locally, painful over SSH.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">Learning curve</td>
+            <td class="col-spice">Click around. There is no curve.</td>
+            <td class="col-other">Modal editing, leader keys, plugins.</td>
+            <td class="col-other">Light, but the UI is dense.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">Mouse support</td>
+            <td class="col-spice">First-class. Every action is clickable.</td>
+            <td class="col-other">Works, but designed around keys.</td>
+            <td class="col-other">First-class.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">SSH-native</td>
+            <td class="col-spice">One static binary, OSC 52, tmux-safe.</td>
+            <td class="col-other">Works, but clipboard needs effort.</td>
+            <td class="col-other">Remote SSH plugin needs node on host.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">Weight</td>
+            <td class="col-spice">One Go binary, ~10 MB.</td>
+            <td class="col-other">Lua + plugins + LSPs.</td>
+            <td class="col-other">Electron + extensions + node.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">Config sanity</td>
+            <td class="col-spice">No config file. No dotfiles.</td>
+            <td class="col-other">Lua/Vimscript dotfiles.</td>
+            <td class="col-other">settings.json, per-workspace JSON.</td>
+          </tr>
+          <tr>
+            <td class="col-axis">Default keymap</td>
+            <td class="col-spice">Esc-leader, no Ctrl conflicts.</td>
+            <td class="col-other">Modal, vimrc-shaped.</td>
+            <td class="col-other">Ctrl/Cmd-everything (fights tmux).</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    {{/* Mobile cards */}}
+    <div class="mt-10 md:hidden compare-cards">
+      <div class="compare-card is-spice">
+        <h3 style="color: #fff;">SpiceEdit</h3>
+        <dl>
+          <dt>Setup</dt><dd>Install, run.</dd>
+          <dt>Curve</dt><dd>Click around. No curve.</dd>
+          <dt>Mouse</dt><dd>First-class. Every action.</dd>
+          <dt>SSH</dt><dd>One static binary. OSC 52. tmux-safe.</dd>
+          <dt>Weight</dt><dd>One Go binary, ~10 MB.</dd>
+          <dt>Config</dt><dd>No config file. No dotfiles.</dd>
+          <dt>Keymap</dt><dd>Esc-leader, no Ctrl conflicts.</dd>
+        </dl>
+      </div>
+      <div class="compare-card">
+        <h3>Neovim</h3>
+        <dl>
+          <dt>Setup</dt><dd>Hours-to-weeks of config.</dd>
+          <dt>Curve</dt><dd>Modal editing, leader keys, plugins.</dd>
+          <dt>Mouse</dt><dd>Works, but designed around keys.</dd>
+          <dt>SSH</dt><dd>Works, but clipboard needs effort.</dd>
+          <dt>Weight</dt><dd>Lua + plugins + LSPs.</dd>
+          <dt>Config</dt><dd>Lua/Vimscript dotfiles.</dd>
+          <dt>Keymap</dt><dd>Modal, vimrc-shaped.</dd>
+        </dl>
+      </div>
+      <div class="compare-card">
+        <h3>VS Code</h3>
+        <dl>
+          <dt>Setup</dt><dd>Minutes locally, painful over SSH.</dd>
+          <dt>Curve</dt><dd>Light, but the UI is dense.</dd>
+          <dt>Mouse</dt><dd>First-class.</dd>
+          <dt>SSH</dt><dd>Remote SSH plugin needs node on host.</dd>
+          <dt>Weight</dt><dd>Electron + extensions + node.</dd>
+          <dt>Config</dt><dd>settings.json, per-workspace JSON.</dd>
+          <dt>Keymap</dt><dd>Ctrl/Cmd-everything (fights tmux).</dd>
+        </dl>
+      </div>
+    </div>
+
+    <p class="mt-10 max-w-3xl text-base lg:text-lg" style="color: var(--color-text-soft);">
+      Use Neovim when you want a programmable IDE in a terminal. Use VS Code when you want an IDE on
+      your desk. Use SpiceEdit when you want to glance at a file on a server, fix one line, and get
+      back to your agents.
+    </p>
+  </div>
+</section>
+
+{{/* ------------------------- FEATURES ------------------------------- */}}
+<section id="features" class="py-16 lg:py-24">
+  <div class="container-page reveal">
+    <div class="max-w-3xl">
+      <span class="section-eyebrow">Features</span>
+      <h2 class="section-title">Designed for the workflow nobody else solves.</h2>
+      <p class="section-subtitle">
+        Every feature exists because it removes friction from the SSH-into-tmux loop. Nothing is here
+        because someone shipped it in 2014 and nobody dared remove it.
+      </p>
+    </div>
+
+    {{ $features := slice
+      (dict "icon" "mouse" "title" "Mouse-first UI" "desc" "Click a file to open it. Click a tab to switch. Drag to select. Scroll wheel actually scrolls. Drop the splitter where you want it. Right-click works when your terminal forwards it; the menu icon and a double-tap of Esc cover when it doesn't.")
+      (dict "icon" "search" "title" "Fuzzy file finder" "desc" "Press Esc-p. Type three letters. Open the file. Indexes 50,000 files in roughly 150 ms by shelling out to <code>git ls-files</code>, falls back to a gitignore-aware walker on non-git projects, and rebuilds in the background every ten seconds.")
+      (dict "icon" "format" "title" "Format on save" "desc" "Drop <code>.spiceedit/format.json</code> in a repo. Map extensions to argv arrays — <code>gofmt</code>, <code>prettier</code>, <code>pint</code>, <code>ruff</code>, anything. SpiceEdit prompts once before running anything and re-prompts when the config changes. No shell, no injection surface.")
+      (dict "icon" "tmux" "title" "SSH-native clipboard" "desc" "Copy uses OSC 52 with a tmux passthrough wrapper, so highlighting text on a remote box ends up in your local clipboard. Works in iTerm2, WezTerm, Kitty, Alacritty, Ghostty, gnome-terminal, and the macOS default.")
+      (dict "icon" "actions" "title" "Custom actions" "desc" "Define shell-out actions in <code>~/.config/spiceedit/actions.json</code>. SpiceEdit exports <code>$FILE</code> and <code>$FILENAME</code> to a <code>sh -c</code> subshell. The killer use case: SSH into a server, click <em>Open on Laptop</em>, and your laptop opens the file you were just editing on the box.")
+      (dict "icon" "binary" "title" "One static binary" "desc" "No CGO, no runtime, no plugin manager, no language server requirement. Cross-compiled for macOS, Linux, and Windows on amd64 and arm64. <code>scp</code> it onto a box. Run it. That's the install.")
+      (dict "icon" "highlight" "title" "Syntax highlighting via Chroma" "desc" "Pure-Go tokenizer with a Tokyo Night-inspired palette. Picks a lexer by filename, falls back to content sniffing, then to plain text. Dozens of languages out of the box, no tree-sitter setup, no language servers to install.")
+      (dict "icon" "keys" "title" "Esc-leader hotkeys" "desc" "Tap Esc, then a letter inside half a second. <code>Esc s</code> saves, <code>Esc p</code> finds a file, <code>Esc f</code> searches the buffer. No Ctrl+ shortcuts fighting tmux or your terminal. Double-tap Esc opens the action menu.")
+    }}
+
+    <div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      {{ range $features }}
+        <div class="card">
+          <div class="feature-icon mb-4">
+            {{ partial "feature-icon.html" .icon }}
+          </div>
+          <h3 class="text-lg font-semibold mb-2" style="color: #fff;">{{ .title }}</h3>
+          <p class="text-sm leading-relaxed" style="color: var(--color-text-soft);">{{ .desc | safeHTML }}</p>
+        </div>
+      {{ end }}
+    </div>
+  </div>
+</section>
+
+{{/* ------------------------- INSTALL -------------------------------- */}}
+<section id="install" class="py-16 lg:py-24" style="background: linear-gradient(180deg, transparent, rgba(187,154,247,0.04), transparent);">
+  <div class="container-page reveal">
+    <div class="max-w-3xl">
+      <span class="section-eyebrow">Install</span>
+      <h2 class="section-title">Pick your platform. Run one line.</h2>
+      <p class="section-subtitle">
+        We auto-detected your OS. Switch tabs to see the others — your choice sticks.
+      </p>
+    </div>
+
+    <div class="mt-10 max-w-3xl">
+      {{ partial "install-block.html" . }}
+    </div>
+
+    <div class="mt-8 max-w-3xl text-sm" style="color: var(--color-muted);">
+      Need another path? See the full
+      <a href="/docs/installation/" style="color: var(--color-accent);">installation docs</a>
+      for manual binaries, version pinning, custom directories, and uninstall steps.
+    </div>
+  </div>
+</section>
+
+{{/* ----------------------- AUDIENCES / FOOTER HOOKS ----------------- */}}
+<section class="py-16 lg:py-24">
+  <div class="container-page reveal">
+    <div class="max-w-3xl">
+      <span class="section-eyebrow">Made for</span>
+      <h2 class="section-title">The workflows we built it for.</h2>
+    </div>
+    <div class="mt-10 flex flex-wrap gap-3">
+      <span class="audience-pill">Engineers who SSH into boxes</span>
+      <span class="audience-pill">Teams that live in tmux or Zellij</span>
+      <span class="audience-pill">AI-native developers who only touch the editor for tweaks</span>
+      <span class="audience-pill">Anyone tired of memorizing keybindings</span>
+      <span class="audience-pill">Sysadmins editing one config file on a remote server</span>
+    </div>
+
+    {{/* Final CTA */}}
+    <div class="mt-16 card flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+      <div>
+        <h3 class="text-2xl font-semibold mb-2" style="color: #fff;">Install in one line.</h3>
+        <p style="color: var(--color-text-soft);">No runtime. No setup. One static Go binary.</p>
+      </div>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <a href="/#install" class="btn btn-primary">
+          Install in one line
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>
+          </svg>
+        </a>
+        <a href="/docs/" class="btn btn-secondary">Read the docs</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+{{ end }}

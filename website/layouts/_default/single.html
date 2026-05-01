@@ -1,0 +1,10 @@
+{{ define "main" }}
+<div class="container-page py-12 lg:py-20">
+  <article class="prose-doc mx-auto">
+    <header class="mb-8">
+      <h1 class="text-3xl lg:text-5xl font-semibold tracking-tight" style="color: #fff;">{{ .Title }}</h1>
+    </header>
+    {{ .Content }}
+  </article>
+</div>
+{{ end }}

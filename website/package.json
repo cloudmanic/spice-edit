@@ -1,0 +1,17 @@
+{
+  "name": "spice-edit-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marketing + docs site for SpiceEdit.",
+  "scripts": {
+    "build:css": "tailwindcss -i assets/css/tailwind.css -o static/css/site.css --minify",
+    "dev:css": "tailwindcss -i assets/css/tailwind.css -o static/css/site.css --watch",
+    "build": "npm run build:css && hugo --minify",
+    "dev": "npm-run-all --parallel dev:css dev:hugo",
+    "dev:hugo": "hugo server"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.0.0",
+    "npm-run-all": "^4.1.5"
+  }
+}

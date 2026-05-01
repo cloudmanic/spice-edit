@@ -6,14 +6,16 @@
 # =============================================================================
 
 BINARY := spiceedit
+SITE_DIR := website
 
-.PHONY: run build install build-linux test test-short coverage tidy clean help
+.PHONY: run build install build-linux test test-short coverage tidy clean help \
+        site-install site-dev site-build site-clean
 
 # help is the default target so `make` with no args prints what's available.
 help:
 	@echo "SpiceEdit — opinionated mouse-first terminal code editor"
 	@echo ""
-	@echo "Targets:"
+	@echo "Editor targets:"
 	@echo "  make run          Run the editor in the current directory."
 	@echo "  make build        Build the binary into ./bin/$(BINARY)."
 	@echo "  make install      Install ./bin/$(BINARY) into /usr/local/bin."
@@ -23,6 +25,12 @@ help:
 	@echo "  make coverage     Generate coverage.out + an HTML report at coverage.html."
 	@echo "  make tidy         Run 'go mod tidy'."
 	@echo "  make clean        Remove ./bin and coverage artifacts."
+	@echo ""
+	@echo "Website targets (spice-edit.com — Hugo + Tailwind in ./$(SITE_DIR)):"
+	@echo "  make site-install One-time: install npm deps in $(SITE_DIR)."
+	@echo "  make site-dev     Run the site locally with live reload at http://localhost:1313."
+	@echo "  make site-build   Build a production-ready site into $(SITE_DIR)/public."
+	@echo "  make site-clean   Remove $(SITE_DIR)/public and Tailwind output."
 
 # run starts the editor via 'go run'. Quickest path for development.
 # For SSH/production use, prefer 'make build' and ship the binary.
@@ -71,3 +79,30 @@ tidy:
 # clean removes build artifacts and coverage output.
 clean:
 	rm -rf bin coverage.out coverage.html
+
+# -----------------------------------------------------------------------------
+# Website targets — spice-edit.com lives in ./website (Hugo + Tailwind v4).
+# Requires Hugo extended (>= 0.135) and Node (>= 18) on PATH.
+# -----------------------------------------------------------------------------
+
+# site-install pulls the npm deps the site needs (Tailwind CLI + npm-run-all).
+# Idempotent — safe to re-run any time.
+site-install:
+	cd $(SITE_DIR) && npm install
+
+# site-dev runs Tailwind in watch mode and Hugo's dev server in parallel,
+# so edits to layouts, content, or CSS rebuild and live-reload at
+# http://localhost:1313. Stops both on Ctrl+C.
+site-dev:
+	cd $(SITE_DIR) && npm run dev
+
+# site-build produces the production-ready static site at $(SITE_DIR)/public.
+# This is what the GitHub Pages workflow ships. The Tailwind build runs first
+# so the minified CSS is on disk before Hugo reads its static directory.
+site-build:
+	cd $(SITE_DIR) && npm run build
+
+# site-clean removes the generated build outputs. The npm cache and
+# node_modules stay put — that's site-install's job to manage.
+site-clean:
+	rm -rf $(SITE_DIR)/public $(SITE_DIR)/static/css/site.css $(SITE_DIR)/resources

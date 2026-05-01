@@ -1,0 +1,52 @@
+<header class="site-header">
+  <div class="container-page flex items-center justify-between h-16">
+    <a href="/" class="logo-mark" aria-label="SpiceEdit home">
+      <span class="glyph" aria-hidden="true">≡</span>
+      <span>SpiceEdit</span>
+    </a>
+
+    <nav class="hidden lg:flex items-center gap-1" aria-label="Primary">
+      <a href="/docs/" class="nav-link {{ if hasPrefix .RelPermalink "/docs" }}is-active{{ end }}">Docs</a>
+      <a href="/#install" class="nav-link">Install</a>
+      <a href="/#features" class="nav-link">Features</a>
+      <a href="/docs/faq/" class="nav-link">FAQ</a>
+    </nav>
+
+    <div class="hidden lg:flex items-center gap-3">
+      <span class="badge" title="Latest release">
+        <span class="badge-dot" aria-hidden="true"></span>
+        {{ site.Params.version }}
+      </span>
+      <a href="{{ site.Params.github_url }}" rel="noopener" target="_blank" class="btn btn-secondary" aria-label="Star SpiceEdit on GitHub">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+
+    <button
+      type="button"
+      class="lg:hidden btn btn-ghost"
+      data-mobile-toggle
+      aria-controls="mobile-menu"
+      aria-expanded="false"
+      aria-label="Open menu"
+    >
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<div id="mobile-menu" class="mobile-menu" role="dialog" aria-modal="true" aria-label="Site menu">
+  <nav class="nav-list" aria-label="Mobile primary">
+    <a href="/" class="nav-link">Home</a>
+    <a href="/docs/" class="nav-link">Docs</a>
+    <a href="/#install" class="nav-link">Install</a>
+    <a href="/#features" class="nav-link">Features</a>
+    <a href="/docs/faq/" class="nav-link">FAQ</a>
+    <a href="{{ site.Params.github_url }}" rel="noopener" target="_blank" class="nav-link">GitHub →</a>
+  </nav>
+</div>
