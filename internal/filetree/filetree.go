@@ -203,10 +203,19 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 	}
 
-	// Header — small all-caps label above the project name.
+	// Header — small all-caps label above the project name. The
+	// project name itself is also a click target: it's the only way
+	// to reset the active folder back to the root once a subfolder
+	// has been selected. Render bold/Accent when it *is* the active
+	// folder, plain text otherwise — same visual rule the children
+	// rows follow, so the highlight is honest.
 	headerStyle := tcell.StyleDefault.Background(bg).Foreground(th.Muted).Bold(true)
 	drawString(scr, x, y, w, " EXPLORER", headerStyle)
-	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Accent).Bold(true)
+	rootActive := t.ActiveFolder == "" || t.ActiveFolder == t.Root.Path
+	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text).Bold(true)
+	if rootActive {
+		rootStyle = tcell.StyleDefault.Background(bg).Foreground(th.Accent).Bold(true)
+	}
 	drawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
 
 	// Build the flat list of visible rows from the root's children.
@@ -320,12 +329,21 @@ func (t *Tree) clampScroll(total, viewH int) {
 }
 
 // HitTest maps a click within the tree's render rectangle to a Node.
-// ok=false means the click landed on the header rows or empty space below
-// the last entry.
+// Row 0 is the "EXPLORER" header (not clickable). Row 1 is the project
+// root name — clicking it returns t.Root so the caller can set the
+// active folder back to the project root, which is otherwise
+// unreachable once the user has selected any subfolder. Rows 2+ map
+// into the rendered children list.
+//
+// ok=false means the click landed on the EXPLORER header or empty
+// space below the last entry.
 func (t *Tree) HitTest(localX, localY int) (*Node, bool) {
 	_ = localX
-	if localY < 2 {
+	if localY < 1 {
 		return nil, false
+	}
+	if localY == 1 {
+		return t.Root, true
 	}
 	row := localY - 2
 	if row < 0 || row >= len(t.visible) {
