@@ -19,7 +19,16 @@ spiceedit main.go      # opens that file (project root = its parent dir)
 spiceedit new-file.go  # creates the file on first save (vim-style)
 ```
 
-<div class="screenshot-placeholder screenshot-aspect-video my-6"><span class="label">[screenshot: opening-a-project]</span></div>
+<figure class="screenshot-figure">
+  <img
+    src="/img/screenshots/opening-a-project.png"
+    srcset="/img/screenshots/opening-a-project-1200.png 1200w, /img/screenshots/opening-a-project.png 2000w"
+    sizes="(min-width: 1024px) 800px, 100vw"
+    width="2000" height="1414"
+    alt="SpiceEdit just after opening the spice-edit project — sidebar shows the file tree, the editor area shows 'No file open' with a hint to click a file or press the menu icon."
+    loading="lazy" decoding="async"
+  />
+</figure>
 
 The layout is what you'd expect: a file tree on the left, a tab bar across the top, the editor in the middle, a status bar at the bottom.
 
@@ -27,7 +36,16 @@ The layout is what you'd expect: a file tree on the left, a tab bar across the t
 
 Single-click any file in the tree to open it. Single-click a folder to expand it. The active folder — the one New File and Rename Folder will target — bolds in the sidebar so you always know where the next file lands.
 
-<div class="screenshot-placeholder screenshot-aspect-video my-6"><span class="label">[screenshot: clicking-a-file]</span></div>
+<figure class="screenshot-figure">
+  <img
+    src="/img/screenshots/clicking-a-file.png"
+    srcset="/img/screenshots/clicking-a-file-1200.png 1200w, /img/screenshots/clicking-a-file.png 2000w"
+    sizes="(min-width: 1024px) 800px, 100vw"
+    width="2000" height="1409"
+    alt="main.go open in the editor with Tokyo Night syntax highlighting after clicking it in the sidebar."
+    loading="lazy" decoding="async"
+  />
+</figure>
 
 ## Switch tabs
 
@@ -41,7 +59,16 @@ Every action lives in the action menu. Open it three ways:
 2. Right-click anywhere outside the file tree (works in most terminals; macOS Terminal + tmux often eats Button3).
 3. Double-tap `Esc`.
 
-<div class="screenshot-placeholder screenshot-aspect-video my-6"><span class="label">[screenshot: clicking-the-menu]</span></div>
+<figure class="screenshot-figure">
+  <img
+    src="/img/screenshots/clicking-the-menu.png"
+    srcset="/img/screenshots/clicking-the-menu-1200.png 1200w, /img/screenshots/clicking-the-menu.png 2000w"
+    sizes="(min-width: 1024px) 800px, 100vw"
+    width="2000" height="1412"
+    alt="Action menu modal expanded over the editor — Save, Close tab, Find file, Open on Repo, Quit editor, and other actions visible."
+    loading="lazy" decoding="async"
+  />
+</figure>
 
 The menu is keyboard-navigable too — arrow keys to move, Enter to select, Esc to dismiss.
 
@@ -51,7 +78,16 @@ Click in the editor body to place the cursor. Type. Drag to select. The standard
 
 To save: open the menu and pick **Save**, or press `Esc s`.
 
-<div class="screenshot-placeholder screenshot-aspect-video my-6"><span class="label">[screenshot: saving]</span></div>
+<figure class="screenshot-figure">
+  <img
+    src="/img/screenshots/saving.png"
+    srcset="/img/screenshots/saving-1200.png 1200w, /img/screenshots/saving.png 2000w"
+    sizes="(min-width: 1024px) 800px, 100vw"
+    width="2000" height="1411"
+    alt="Editor with a line selected mid-edit, status bar at the bottom showing the cursor position and dirty marker."
+    loading="lazy" decoding="async"
+  />
+</figure>
 
 ## Resize the sidebar
 

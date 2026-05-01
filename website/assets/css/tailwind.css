@@ -858,6 +858,18 @@
     width: 100%;
     height: auto;
   }
+  .screenshot-figure {
+    margin: 1.5rem 0;
+  }
+  .screenshot-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-subtle);
+    box-shadow: 0 18px 50px -28px rgba(0,0,0,0.7);
+    background-color: var(--color-bg-soft);
+  }
 
   /* "Made for" pills */
   .audience-pill {
