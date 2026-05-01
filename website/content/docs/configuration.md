@@ -24,6 +24,46 @@ Top-level editor preferences. Optional — without it, every field uses its defa
 
 The detector can only see whether the OS knows about the font — it can't tell whether your *terminal* is configured to render it. If icons turn on but show as "tofu" boxes, set `"icons": "off"` and either point your terminal at a Nerd Font or live without them.
 
+### Installing a Nerd Font
+
+The icons in the file tree come from [Nerd Fonts](https://www.nerdfonts.com/) — they're not part of stock system fonts. SpiceEdit needs **two** things in place:
+
+1. A Nerd Font installed at the OS level (so SpiceEdit's detector sees it).
+2. Your terminal emulator configured to render that font.
+
+Without step 2, glyphs render as boxes ("tofu") even though detection says yes.
+
+**macOS (Homebrew)** — pick any patched font and install it:
+
+```sh
+brew install --cask font-jetbrains-mono-nerd-font
+# or: font-hack-nerd-font, font-fira-code-nerd-font, font-meslo-lg-nerd-font, etc.
+```
+
+Then point your terminal at it: in iTerm2, **Settings → Profiles → Text → Font** and pick the `Nerd Font` variant. In Terminal.app, **Settings → Profiles → Text → Font**. In Ghostty, set `font-family = "JetBrainsMono Nerd Font"` in `~/.config/ghostty/config`.
+
+**Linux (Debian / Ubuntu)** — Nerd Fonts aren't in apt yet, so download a patched font and drop it in `~/.local/share/fonts`:
+
+```sh
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -fLo "JetBrainsMono.zip" \
+  https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
+unzip -o JetBrainsMono.zip
+fc-cache -fv
+```
+
+Then set the font in your terminal — for GNOME Terminal: **Preferences → Profiles → Text → Custom font → JetBrainsMono Nerd Font**. For Alacritty / Kitty / Wezterm / Ghostty, edit the config file's `font` / `font-family` entry.
+
+**Linux (Arch)** — patched fonts are in the official repos:
+
+```sh
+sudo pacman -S ttf-jetbrains-mono-nerd
+# or any of: ttf-hack-nerd, ttf-firacode-nerd, ttf-meslo-nerd, etc.
+```
+
+**Verifying** — `fc-list | grep -i nerd` should print at least one line. If it does and SpiceEdit *still* shows boxes, the font is installed but your terminal isn't using it; fix the terminal's font setting.
+
 ## `~/.config/spiceedit/actions.json`
 
 User-defined shell-out actions for the action menu. See [Custom actions](/docs/custom-actions/). Optional — without it, the menu shows only built-in actions.
