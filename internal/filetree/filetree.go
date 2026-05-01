@@ -20,6 +20,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/icons"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -57,6 +58,13 @@ type Tree struct {
 	// loaded yet, and the renderer treats nil as "everything clean".
 	DirtyFiles   map[string]bool
 	DirtyFolders map[string]bool
+
+	// IconsEnabled toggles the Nerd Font glyph that prefixes each row.
+	// Set by App.loadSpiceConfig at startup based on the user's
+	// config.json + auto-detection. Off means the row is rendered with
+	// only the existing chevron (the legacy look) — important for
+	// terminals or fonts that can't render the private-use glyphs.
+	IconsEnabled bool
 }
 
 // New creates a tree rooted at root and pre-loads its top-level children so
@@ -241,7 +249,7 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		item := flat[idx]
 		active := item.Node.IsDir && item.Node.Path == t.ActiveFolder
 		dirty := t.isDirty(item.Node)
-		drawNodeRow(scr, th, x, listTop+row, w, item, active, dirty)
+		drawNodeRow(scr, th, x, listTop+row, w, item, active, dirty, t.IconsEnabled)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
@@ -268,7 +276,10 @@ func (t *Tree) isDirty(n *Node) bool {
 // marks the node as having uncommitted git changes (or, for folders,
 // containing some) — it overrides the normal foreground with the
 // theme's Modified color so changed files stand out at a glance.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active, dirty bool) {
+// withIcons=true prefixes the name with a Nerd Font glyph + space; off
+// renders the legacy chevron-only look for terminals that can't show
+// the private-use glyphs.
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active, dirty, withIcons bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 	var line string
@@ -278,13 +289,21 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		if item.Node.Expanded {
 			chev = "▾"
 		}
-		line = " " + indent + chev + " " + item.Node.Name + "/"
+		if withIcons {
+			line = " " + indent + chev + " " + icons.For(item.Node.Name, true, item.Node.Expanded) + "  " + item.Node.Name + "/"
+		} else {
+			line = " " + indent + chev + " " + item.Node.Name + "/"
+		}
 		fg = th.FolderColor
 		if active {
 			fg = th.Accent
 		}
 	} else {
-		line = " " + indent + "  " + item.Node.Name
+		if withIcons {
+			line = " " + indent + "  " + icons.For(item.Node.Name, false, false) + "  " + item.Node.Name
+		} else {
+			line = " " + indent + "  " + item.Node.Name
+		}
 		fg = th.FileColor
 	}
 	// Dirty wins over the normal foreground but the active-folder bold

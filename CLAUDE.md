@@ -46,6 +46,8 @@ internal/editor/tab.go        Tab: path, buffer, cursor, anchor, scroll, dirty s
 internal/editor/highlight.go  Chroma → []tcell.Style per line
 internal/filetree/filetree.go Lazy tree, identity-preserving refresh, hit-test, render
 internal/clipboard/clipboard.go OSC 52 to /dev/tty with tmux passthrough wrap
+internal/spiceconfig/spiceconfig.go ~/.config/spiceedit/config.json loader (icons mode)
+internal/icons/icons.go       Nerd Font detection + per-file glyph mapping
 internal/theme/theme.go       Tokyo Night palette + syntax color mapping
 internal/version/version.go   const Version = "x.y.z" — single line, CI bumps it
 ```

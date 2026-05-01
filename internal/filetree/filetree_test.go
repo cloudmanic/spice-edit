@@ -20,6 +20,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/cloudmanic/spice-edit/internal/icons"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -671,4 +672,116 @@ func findRowWithBoth(cells []tcell.SimCell, w, h int, name string, chev rune) bo
 		}
 	}
 	return false
+}
+
+// TestRender_IconsDisabledByDefault pins down the default look — a tree
+// whose IconsEnabled flag was never flipped should not embed any Nerd
+// Font glyph in its output. Important so users on terminals without a
+// Nerd Font don't see broken-glyph "tofu" boxes after upgrading.
+func TestRender_IconsDisabledByDefault(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	// Walk every visible row and assert none of the file-default,
+	// folder-open, or folder-closed glyphs appear.
+	for y := 0; y < 20; y++ {
+		row := rowText(cells, w, y)
+		for _, g := range []string{icons.FileDefault, icons.FolderOpen, icons.FolderClosed} {
+			if containsRune(row, g) {
+				t.Fatalf("row %d unexpectedly contains glyph %q: %q", y, g, row)
+			}
+		}
+	}
+}
+
+// TestRender_IconsEnabledShowsFolderGlyph verifies that flipping
+// IconsEnabled actually emits the folder-closed glyph for an
+// unexpanded directory — the most common visible case.
+func TestRender_IconsEnabledShowsFolderGlyph(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.IconsEnabled = true
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	rowY := findRowY(cells, w, 20, "Beta") // collapsed
+	if rowY < 0 {
+		t.Fatal("could not find Beta row")
+	}
+	if !containsRune(rowText(cells, w, rowY), icons.FolderClosed) {
+		t.Fatalf("expected FolderClosed glyph on Beta row, got %q",
+			rowText(cells, w, rowY))
+	}
+}
+
+// TestRender_IconsEnabledShowsFileGlyph picks the .go file inside
+// alpha/, expands the parent so it's visible, and checks the
+// language-specific glyph from icons.For lands on its row.
+func TestRender_IconsEnabledShowsFileGlyph(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.IconsEnabled = true
+	alpha := findChild(tr.Root, "alpha")
+	tr.Toggle(alpha) // expand so inner.go renders
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	rowY := findRowY(cells, w, 20, "inner.go")
+	if rowY < 0 {
+		t.Fatal("could not find inner.go row")
+	}
+	want := icons.For("inner.go", false, false)
+	if !containsRune(rowText(cells, w, rowY), want) {
+		t.Fatalf("expected glyph %q on inner.go row, got %q",
+			want, rowText(cells, w, rowY))
+	}
+}
+
+// TestRender_IconsEnabledFolderOpenSwitches verifies the open/closed
+// folder glyph pair flips correctly when the user expands a folder —
+// the visual cue most users will rely on more than the chevron.
+func TestRender_IconsEnabledFolderOpenSwitches(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.IconsEnabled = true
+	alpha := findChild(tr.Root, "alpha")
+
+	// Collapsed: should show closed-folder glyph, not the open one.
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row (collapsed)")
+	}
+	collapsed := rowText(cells, w, rowY)
+	if !containsRune(collapsed, icons.FolderClosed) {
+		t.Fatalf("collapsed alpha row missing FolderClosed: %q", collapsed)
+	}
+	if containsRune(collapsed, icons.FolderOpen) {
+		t.Fatalf("collapsed alpha row should not show FolderOpen: %q", collapsed)
+	}
+
+	// Expanded: should switch to open-folder glyph.
+	tr.Toggle(alpha)
+	cells, w = renderAndCollect(t, tr, 40, 20)
+	rowY = findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row (expanded)")
+	}
+	expanded := rowText(cells, w, rowY)
+	if !containsRune(expanded, icons.FolderOpen) {
+		t.Fatalf("expanded alpha row missing FolderOpen: %q", expanded)
+	}
 }

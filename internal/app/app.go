@@ -32,6 +32,8 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
 	"github.com/cloudmanic/spice-edit/internal/finder"
+	"github.com/cloudmanic/spice-edit/internal/icons"
+	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 	"github.com/cloudmanic/spice-edit/internal/version"
 )
@@ -451,6 +453,7 @@ func New(rootDir string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 	}
 	a.setActiveFolder(tree.Root.Path)
+	a.loadSpiceConfig()
 	a.refreshGitStatus()
 	a.loadCustomActions()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
@@ -481,6 +484,22 @@ func (a *App) loadCustomActions() {
 		return
 	}
 	a.customActions = actions
+}
+
+// loadSpiceConfig reads ~/.config/spiceedit/config.json (if any),
+// resolves the Nerd Fonts auto/on/off mode to a concrete bool via
+// icons.Resolve, and stamps the result onto the file tree so the
+// next render starts drawing glyphs (or doesn't). A malformed
+// config flashes a status message but never blocks startup — the
+// editor falls back to Defaults() and keeps going.
+func (a *App) loadSpiceConfig() {
+	cfg, err := spiceconfig.Load(spiceconfig.DefaultPath())
+	if err != nil {
+		a.flash("config: " + err.Error())
+	}
+	if a.tree != nil {
+		a.tree.IconsEnabled = icons.Resolve(cfg.Icons)
+	}
 }
 
 // refreshGitStatus re-runs `git status --porcelain` against the project
