@@ -130,12 +130,17 @@ func (a *App) maybeOfferInstall(idx int, tabPath string) {
 	if defaults == nil {
 		return
 	}
-	argv := defaults.CommandFor(tabPath)
-	if argv == nil {
-		return
-	}
 	ext := strings.TrimPrefix(filepath.Ext(tabPath), ".")
 	if ext == "" {
+		return
+	}
+	// Pull the *template* (with $FILE intact) so we can write it
+	// verbatim to the project's format.json on Yes — substituting
+	// before persisting would bake the current file's absolute path
+	// into the config and break for the next save, every other file
+	// in the project, and every teammate who pulled the repo.
+	template := append([]string(nil), defaults.Commands[ext]...)
+	if len(template) == 0 {
 		return
 	}
 
@@ -156,7 +161,7 @@ func (a *App) maybeOfferInstall(idx int, tabPath string) {
 		}
 	}
 
-	a.openFormatInstallPrompt(idx, ext, argv)
+	a.openFormatInstallPrompt(idx, ext, template)
 }
 
 // openFormatTrustPrompt asks the user whether to allow this project's
@@ -205,17 +210,24 @@ func (a *App) openFormatTrustPrompt(idx int, cfg *format.Config, argv []string) 
 // The prompt uses the same Yes/No confirm modal as the trust prompt
 // so we stay within the existing modal vocabulary instead of
 // inventing a new shape for one feature.
-func (a *App) openFormatInstallPrompt(idx int, ext string, argv []string) {
+//
+// argvTemplate is the unsubstituted argv (with $FILE intact) — it's
+// what we persist into format.json so the config is portable across
+// machines and reusable for every future save of this extension.
+// Substitution happens at run time inside execFormatter via
+// substituteFile, mirroring the path Config.CommandFor takes for
+// already-installed entries.
+func (a *App) openFormatInstallPrompt(idx int, ext string, argvTemplate []string) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
 	tab := a.tabs[idx]
 	tabPath := tab.Path
 	root := a.rootDir
-	// Use just the executable name (argv[0]) in the prompt — the
-	// full argv with flags would crowd the modal and most of the
+	// Use just the executable name (argvTemplate[0]) in the prompt —
+	// the full argv with flags would crowd the modal and most of the
 	// time the user only cares which formatter is being added.
-	formatterName := argv[0]
+	formatterName := argvTemplate[0]
 
 	title := "Install formatter for this project?"
 	msg := fmt.Sprintf("Add %s for .%s to %s?", formatterName, ext,
@@ -223,7 +235,7 @@ func (a *App) openFormatInstallPrompt(idx int, ext string, argv []string) {
 
 	a.openConfirm(title, msg, func(app *App) {
 		// Yes — merge into project config, trust the new hash, run.
-		hash, err := format.InstallCommandIntoProject(root, ext, argv)
+		hash, err := format.InstallCommandIntoProject(root, ext, argvTemplate)
 		if err != nil {
 			app.flash("install failed: " + err.Error())
 			return
@@ -240,11 +252,30 @@ func (a *App) openFormatInstallPrompt(idx int, ext string, argv []string) {
 		// after every other directory mutation we make.
 		app.tree.Refresh()
 		app.refreshGitStatus()
-		app.execFormatter(tabPath, argv)
+		// Substitute $FILE at run time, never at install time. This
+		// keeps the on-disk template portable while still pointing
+		// the formatter at the file the user just saved.
+		app.execFormatter(tabPath, substituteFile(argvTemplate, tabPath))
 	})
 	a.confirmCancelHook = func(app *App) {
 		app.persistInstallDecline(root, ext, true)
 	}
+}
+
+// substituteFile expands $FILE in every arg of template using the
+// absolute path of filePath. Used by the install Yes path because
+// InstallCommandIntoProject persists the template verbatim — we
+// can't rely on Config.CommandFor here, which loads from disk.
+func substituteFile(template []string, filePath string) []string {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		abs = filePath
+	}
+	out := make([]string, len(template))
+	for i, arg := range template {
+		out[i] = strings.ReplaceAll(arg, format.FileToken, abs)
+	}
+	return out
 }
 
 // persistInstallDecline writes a per-extension install decision to

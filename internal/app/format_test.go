@@ -8,7 +8,6 @@
 package app
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,15 +31,22 @@ func writeFormatConfig(t *testing.T, root, body string) {
 	}
 }
 
-// useTestTrustFile redirects the trust file to a temp path for the
-// duration of the test. Without this every format test would either
-// pollute the real ~/.config/spiceedit/format-trust.json or carry
-// state across runs.
+// useTestTrustFile redirects the trust file *and* the global
+// defaults file to temp paths for the duration of the test.
+//
+// Defaults are pinned alongside trust because real user defaults
+// (e.g. the gofmt entry in ~/.config/spiceedit/format-defaults.json)
+// would otherwise leak into runFormatOnSave tests and silently
+// trigger install prompts they weren't written to handle. Tests
+// that *do* want a defaults file call useTestDefaultsFile after
+// this to overwrite the empty path with real content.
 func useTestTrustFile(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "trust.json")
-	t.Setenv("SPICEEDIT_TRUST_FILE", path)
-	return path
+	dir := t.TempDir()
+	trustPath := filepath.Join(dir, "trust.json")
+	t.Setenv("SPICEEDIT_TRUST_FILE", trustPath)
+	t.Setenv("SPICEEDIT_DEFAULTS_FILE", filepath.Join(dir, "no-such-defaults.json"))
+	return trustPath
 }
 
 // useTestDefaultsFile redirects the global defaults file the same
@@ -397,12 +403,11 @@ func TestMaybeOfferInstall_AcceptWritesProjectConfig(t *testing.T) {
 	if err := os.WriteFile(target, []byte("orig\n"), 0644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// Use a fake "formatter" that writes a sentinel so we can confirm
-	// it actually ran. argv[0] is sh — install will be persisted as
-	// the verbatim argv we pass here.
-	defaultsBody := fmt.Sprintf(
-		`{"commands":{"go":["sh","-c","echo formatted > %s"]}}`, target)
-	useTestDefaultsFile(t, defaultsBody)
+	// $FILE in the defaults must round-trip through install untouched
+	// so the resulting project config is portable. The fake formatter
+	// is sh -c 'echo formatted > $FILE' — substitution happens at run
+	// time, not install time.
+	useTestDefaultsFile(t, `{"commands":{"go":["sh","-c","echo formatted > $FILE"]}}`)
 
 	a := newTestApp(t, root)
 	openTabAtPath(t, a, target)
@@ -415,13 +420,23 @@ func TestMaybeOfferInstall_AcceptWritesProjectConfig(t *testing.T) {
 	a.confirmHover = 1
 	a.confirmYes()
 
-	// Project config should now exist with a "go" entry.
+	// Project config should now exist with a "go" entry that still
+	// contains the literal $FILE token — anything else means the
+	// substituted absolute path got baked into the persisted config.
 	cfg, err := format.Load(root)
 	if err != nil {
 		t.Fatalf("load project cfg: %v", err)
 	}
 	if cfg == nil || len(cfg.Commands["go"]) == 0 {
 		t.Fatalf("expected project to have go entry, got %v", cfg)
+	}
+	stored := cfg.Commands["go"]
+	last := stored[len(stored)-1]
+	if !containsFileToken(last) {
+		t.Fatalf("persisted argv lost $FILE token: %v", stored)
+	}
+	if filepath.IsAbs(last) {
+		t.Fatalf("persisted argv has absolute path baked in: %q", last)
 	}
 
 	// Trust should record the new hash as allowed.
@@ -442,6 +457,27 @@ func TestMaybeOfferInstall_AcceptWritesProjectConfig(t *testing.T) {
 	if string(got) != "formatted\n" {
 		t.Fatalf("file after format: got %q", string(got))
 	}
+}
+
+// containsFileToken checks whether s contains the literal $FILE
+// placeholder. Tiny helper so the assertion in the install test
+// reads as the rule it's pinning down ("template must round-trip")
+// instead of a strings.Contains call.
+func containsFileToken(s string) bool {
+	return len(s) >= len(format.FileToken) &&
+		stringContains(s, format.FileToken)
+}
+
+// stringContains is a thin alias around strings.Contains so the
+// assertion helper above doesn't pull strings into every test
+// file's import block. Keeps the test reading like prose.
+func stringContains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 // TestMaybeOfferInstall_DeclinePersists pins the No path: cancel
