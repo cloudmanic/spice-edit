@@ -747,6 +747,63 @@ func TestRender_IconsEnabledShowsFileGlyph(t *testing.T) {
 	}
 }
 
+// TestRender_DotFileRendersMuted verifies hidden / dotted entries
+// fall back to the theme's Muted colour rather than FileColor — this
+// is the visual cue users rely on to skim a tree full of metadata
+// (.gitignore, .env, .github/) and find the source files at a glance.
+func TestRender_DotFileRendersMuted(t *testing.T) {
+	root := mkTree(t)
+	// mkTree already creates .git but it's filtered by shouldHide. Add
+	// a .env file that *will* show up so we can assert against its row.
+	mustWrite(t, filepath.Join(root, ".env"), "k=v")
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	rowY := findRowY(cells, w, 20, ".env")
+	if rowY < 0 {
+		t.Fatal("could not find .env row")
+	}
+	if !rowHasColor(cells, w, rowY, theme.Default().Muted) {
+		t.Fatalf(".env row should render in Muted; got %q", rowText(cells, w, rowY))
+	}
+	// Sanity check: a non-dot file on the same level should *not* be muted.
+	zetaY := findRowY(cells, w, 20, "zeta.txt")
+	if zetaY < 0 {
+		t.Fatal("could not find zeta.txt row")
+	}
+	if rowHasColor(cells, w, zetaY, theme.Default().Muted) {
+		t.Fatalf("non-dot file zeta.txt should not be muted")
+	}
+}
+
+// TestRender_DirtyOverridesDotMute verifies the priority cascade
+// documented in drawNodeRow: a modified .env should still flip to the
+// Modified colour rather than staying muted, because "this file has
+// uncommitted changes" is louder information than "this is metadata".
+func TestRender_DirtyOverridesDotMute(t *testing.T) {
+	root := mkTree(t)
+	envPath := filepath.Join(root, ".env")
+	mustWrite(t, envPath, "k=v")
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.DirtyFiles = map[string]bool{envPath: true}
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, ".env")
+	if rowY < 0 {
+		t.Fatal("could not find .env row")
+	}
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
+		t.Fatalf("dirty .env should override Muted with Modified, got %q",
+			rowText(cells, w, rowY))
+	}
+}
+
 // TestRender_IconsEnabledColoursGlyphPerLanguage proves the glyph cell
 // is drawn in icons.ColorFor's mapped colour rather than the row's
 // regular file fg. Without this, every glyph would inherit the same

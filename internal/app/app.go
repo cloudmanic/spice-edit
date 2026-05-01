@@ -2019,23 +2019,38 @@ func (a *App) draw() {
 	}
 }
 
+// iconsOn reports whether Nerd Font glyphs should render in places
+// outside the file tree (e.g. the tab bar). The single source of
+// truth is the file tree — App.loadSpiceConfig stamped the resolved
+// auto/on/off decision onto t.IconsEnabled there, so consulting the
+// tree keeps tabs and tree perfectly in sync (turning icons off via
+// config.json hides them everywhere at once).
+func (a *App) iconsOn() bool {
+	return a.tree != nil && a.tree.IconsEnabled
+}
+
 // layoutTabs computes the tabRect geometry for every tab. Tabs are rendered
 // to the right of the menu button, in the format:
 //
-//	" <dirty><name> × " — a single space pad, two-cell dirty slot
-//	(dot+space, or two spaces), the file name, a separator space, the close
-//	×, and a trailing space.
+//	" <dirty><icon? ><name> × " — a single space pad, two-cell dirty slot
+//	(dot+space, or two spaces), an optional Nerd Font glyph + 1-space
+//	separator (only when icons are enabled), the file name, a separator
+//	space, the close ×, and a trailing space.
 func (a *App) layoutTabs() []tabRect {
 	out := make([]tabRect, 0, len(a.tabs))
 	cursor := a.sidebarW() + menuButtonWidth
+	iconW := 0
+	if a.iconsOn() {
+		iconW = 2 // glyph + space
+	}
 	for i, t := range a.tabs {
 		nameLen := len([]rune(t.DisplayName()))
-		w := 1 + 2 + nameLen + 1 + 1 + 1 // pad+dirty+name+space+×+pad
+		w := 1 + 2 + iconW + nameLen + 1 + 1 + 1 // pad+dirty+icon?+name+space+×+pad
 		out = append(out, tabRect{
 			Index:  i,
 			X:      cursor,
 			Width:  w,
-			CloseX: cursor + 1 + 2 + nameLen + 1,
+			CloseX: cursor + 1 + 2 + iconW + nameLen + 1,
 		})
 		cursor += w
 	}
@@ -2080,6 +2095,27 @@ func (a *App) drawTabBar() {
 			a.screen.SetContent(col, ty, '●', nil, st.Foreground(a.theme.Modified))
 		}
 		col += 2 // skip dirty slot.
+		// Per-language Nerd Font glyph between the dirty dot and the
+		// filename — only when icons are enabled. Coloured the same
+		// way the file tree glyphs are (icons.ColorFor) so the eye
+		// connects "this tab" to "that row in the tree" instantly.
+		if a.iconsOn() {
+			name := tab.DisplayName()
+			glyph := icons.For(name, false, false)
+			gfg := icons.ColorFor(name, false, fg)
+			gst := tcell.StyleDefault.Background(bg).Foreground(gfg)
+			if active {
+				gst = gst.Bold(true)
+			}
+			for _, gr := range glyph {
+				if col >= tx+tw {
+					break
+				}
+				a.screen.SetContent(col, ty, gr, nil, gst)
+				col++
+			}
+			col++ // separator space after glyph
+		}
 		for _, ru := range tab.DisplayName() {
 			if col >= tx+tw {
 				break

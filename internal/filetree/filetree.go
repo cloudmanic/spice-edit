@@ -290,19 +290,30 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 
-	// Compute the row-level foreground (active/dirty/normal cascade).
+	// Compute the row-level foreground via this priority cascade
+	// (highest wins last):
+	//
+	//   1. base = FolderColor / FileColor for the node type
+	//   2. dotfile/dotdir → Muted, so .gitignore / .github read as
+	//      "metadata, not source" without disappearing
+	//   3. active folder → Accent, so the current target is loud
+	//   4. dirty → Modified, so uncommitted work always stands out
+	//
+	// Active/dirty deliberately override the dotfile dimming — a
+	// modified .env or the active .github/ folder is still the most
+	// important thing on the row.
 	var fg tcell.Color
 	if item.Node.IsDir {
 		fg = th.FolderColor
-		if active {
-			fg = th.Accent
-		}
 	} else {
 		fg = th.FileColor
 	}
-	// Dirty wins over the normal foreground but the active-folder bold
-	// stays — the user still wants to see *which* changed folder is the
-	// current target.
+	if strings.HasPrefix(item.Node.Name, ".") {
+		fg = th.Muted
+	}
+	if active {
+		fg = th.Accent
+	}
 	if dirty {
 		fg = th.Modified
 	}
