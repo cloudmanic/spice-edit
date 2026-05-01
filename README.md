@@ -63,6 +63,9 @@ The goals, in order:
   menu, or drag the splitter to resize it.
 - **Clipboard over SSH** — OSC 52, including a `tmux` passthrough so
   copy works from inside a tmux session on a remote host.
+- **Format on save** — opt-in per-project via `.spiceedit/format.json`
+  with a first-run trust prompt so cloning a repo never silently
+  executes its commands. See [Format on save](#format-on-save).
 - **Single binary, no CGO** — cross-compiled for macOS, Linux, and
   Windows on amd64 and arm64.
 
@@ -346,6 +349,83 @@ line, you can put it in `actions.json`:
 { "label": "Run formatter",    "command": "gofmt -w \"$FILE\"" }
 ```
 
+## Format on save
+
+SpiceEdit can run a formatter on every save — `gofmt`, `php-cs-fixer`,
+`prettier`, anything you like — but the feature is **off by default**
+and only kicks in for projects that opt in by checking in a config
+file. Quick edits to a stranger's repo will never silently rewrite
+their files.
+
+### Setup
+
+Create `.spiceedit/format.json` in your project root:
+
+```json
+{
+  "commands": {
+    "go":  ["gofmt", "-w", "$FILE"],
+    "php": ["php-cs-fixer", "fix", "$FILE", "--quiet"],
+    "py":  ["ruff", "format", "$FILE"],
+    "js":  ["prettier", "--write", "$FILE"],
+    "ts":  ["prettier", "--write", "$FILE"]
+  }
+}
+```
+
+- Keys are file extensions, **without** the leading dot.
+- Values are argv arrays — passed straight to `execve`, no shell, so
+  there's no injection surface. (Use `["sh", "-c", "..."]` if you
+  genuinely need a shell.)
+- `$FILE` in any argument is replaced with the absolute path of the
+  file being saved.
+
+### First save: trust prompt
+
+The first time SpiceEdit would run a formatter from a new (or edited)
+`.spiceedit/format.json`, you get a Yes / No prompt:
+
+> **Trust this project's formatter?**
+> Allow .spiceedit/format.json to run formatters on save?
+
+Pick **Yes** once and SpiceEdit will run the configured formatters
+silently from then on. Pick **No** and it will never run them in this
+project — until the config file changes, at which point you'll be
+prompted again. The remembered answer (and the SHA-256 hash of the
+config it applies to) lives in
+`~/.config/spiceedit/format-trust.json`.
+
+The hash is the security trick: a teammate can't push a "v2" of the
+config that runs `rm -rf` — your editor will re-prompt the next time
+you save, because the file has changed since you trusted it.
+
+### What happens on save
+
+1. Save writes the file to disk first. A broken formatter never
+   blocks the save.
+2. SpiceEdit looks up the file's extension in `format.json`. No
+   match → done.
+3. The configured command runs in a goroutine. Slow formatters don't
+   freeze the UI; you can keep typing.
+4. When the formatter finishes, SpiceEdit reloads the buffer — but
+   only if you haven't typed anything since saving. If you did, your
+   in-flight edits win and a status flash tells you the on-disk file
+   was reformatted.
+5. If the configured binary isn't installed, it's a silent no-op.
+   You don't have to install everyone's formatter to clone the repo.
+
+### Sharing vs. ignoring
+
+Two reasonable patterns:
+
+- **Commit `.spiceedit/format.json`** so everyone on the team gets
+  the same format-on-save behavior automatically.
+- **Add `.spiceedit/` to `.gitignore`** if developers prefer their
+  own setups — each person's local copy can configure whatever
+  formatters they like.
+
+Both work. SpiceEdit doesn't care which you pick.
+
 ## Project layout
 
 ```
@@ -357,6 +437,7 @@ line, you can put it in `actions.json`:
 │   ├── filetree/             # Lazy directory tree with identity-preserving refresh
 │   ├── clipboard/            # OSC 52 clipboard with tmux passthrough
 │   ├── customactions/        # Loader for ~/.config/spiceedit/actions.json
+│   ├── format/               # Format-on-save config + trust store
 │   ├── theme/                # Tokyo Night-inspired palette
 │   └── version/              # Single-line version constant
 ├── .github/workflows/        # Auto-release pipeline

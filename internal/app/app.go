@@ -349,6 +349,13 @@ type App struct {
 	// menuLayout. nil / empty when the user hasn't configured any.
 	customActions []customactions.Action
 
+	// formatDenyArmed is set when the active confirm modal was opened
+	// by the format-trust flow. confirmCancel consults it so a "No"
+	// (or Esc) records a trust denial — letting us re-use the existing
+	// Yes/No modal instead of growing a third callback shape. See
+	// format.go for the runtime owner.
+	formatDenyArmed formatDenyContext
+
 	quit bool
 }
 
@@ -506,6 +513,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.refreshGitStatus()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
+	case *formatDoneEvent:
+		a.handleFormatDone(e)
 	}
 }
 
@@ -1289,6 +1298,11 @@ func (a *App) saveTabAt(idx int) bool {
 	}
 	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s", filepath.Base(tab.Path)))
+	// Format-on-save runs after the disk write succeeds, so a broken
+	// formatter never blocks the user's save from landing. The
+	// formatter (when configured + trusted) reloads the buffer
+	// asynchronously via formatDoneEvent — see format.go.
+	a.runFormatOnSave(idx)
 	return true
 }
 

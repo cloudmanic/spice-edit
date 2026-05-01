@@ -67,6 +67,12 @@ func (a *App) closeAllModals() {
 	a.confirmCallback = nil
 	a.dirtySaveCallback = nil
 	a.dirtyDiscardCallback = nil
+	// formatDenyArmed is parked here so an unrelated confirm modal
+	// opened after a format-trust prompt can't accidentally inherit
+	// the deny-on-cancel hook. openFormatTrustPrompt sets the flag
+	// *after* calling openConfirm precisely so this clear doesn't
+	// erase its own arming.
+	a.formatDenyArmed = formatDenyContext{}
 	a.dragMode = ""
 	a.stopAutoScroll()
 }
@@ -344,7 +350,11 @@ func (a *App) confirmYes() {
 }
 
 // confirmCancel dismisses the confirm modal without running the callback.
+// When the format-trust flow armed this modal, the cancel branch also
+// records a trust denial — that's how a "No" answer is persisted
+// without growing a third callback shape on the modal itself.
 func (a *App) confirmCancel() {
+	a.armFormatDenyOnCancel()
 	a.closeAllModals()
 }
 
