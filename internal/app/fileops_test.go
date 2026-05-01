@@ -216,6 +216,143 @@ func TestTabPathRemoved_PrefixCollisionSafe(t *testing.T) {
 	}
 }
 
+// TestDoRenameFolder_RewritesDescendantTabPaths is the most
+// important invariant of folder rename: an open tab pointing at a
+// file inside the renamed directory must follow the rename, or the
+// next save would write to the old (now nonexistent) path and
+// silently re-create the folder under the wrong name.
+func TestDoRenameFolder_RewritesDescendantTabPaths(t *testing.T) {
+	root := t.TempDir()
+	oldDir := filepath.Join(root, "old")
+	if err := os.MkdirAll(filepath.Join(oldDir, "deep"), 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	leaf := filepath.Join(oldDir, "deep", "leaf.go")
+	if err := os.WriteFile(leaf, []byte("package x\n"), 0644); err != nil {
+		t.Fatalf("seed leaf: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.openFile(leaf)
+	a.setActiveFolder(oldDir)
+
+	a.doRenameFolder(oldDir, "renamed")
+
+	newLeaf := filepath.Join(root, "renamed", "deep", "leaf.go")
+	if _, err := os.Stat(newLeaf); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+	if got := a.tabs[0].Path; got != newLeaf {
+		t.Fatalf("descendant tab path: got %q, want %q", got, newLeaf)
+	}
+	if want := filepath.Join(root, "renamed"); a.activeFolder != want {
+		t.Fatalf("activeFolder: got %q, want %q", a.activeFolder, want)
+	}
+}
+
+// TestDoRenameFolder_RefusesPathSeparator pins the input-validation
+// rule shared with file rename: typing a slash should be rejected
+// rather than silently moving the folder somewhere unexpected. The
+// flash gives the user something actionable.
+func TestDoRenameFolder_RefusesPathSeparator(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "src")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+
+	a.doRenameFolder(sub, "nested/inside")
+
+	if _, err := os.Stat(sub); err != nil {
+		t.Fatalf("source folder vanished despite refusal: %v", err)
+	}
+	if !strings.Contains(a.statusMsg, "path separator") {
+		t.Fatalf("expected separator flash, got %q", a.statusMsg)
+	}
+}
+
+// TestDoRenameFolder_RefusesClobber confirms the rename helper
+// won't overwrite a sibling that already exists. Same safety rail
+// renameFile gives file rename, just exercised through the folder
+// path so we don't accidentally regress it for directories.
+func TestDoRenameFolder_RefusesClobber(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "lib")
+	if err := os.Mkdir(src, 0755); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	if err := os.Mkdir(dst, 0755); err != nil {
+		t.Fatalf("seed dst: %v", err)
+	}
+	a := newTestApp(t, root)
+
+	a.doRenameFolder(src, "lib")
+
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("src disappeared despite refusal: %v", err)
+	}
+}
+
+// TestMenuRenameFolder_OpensPrompt walks the menu wiring: clicking
+// Rename folder must open the prompt with the folder's basename
+// already filled in (so the user only edits, not retypes).
+func TestMenuRenameFolder_OpensPrompt(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "victim")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.setActiveFolder(sub)
+
+	a.menuRenameFolder()
+	if !a.promptOpen {
+		t.Fatal("expected prompt to open")
+	}
+	if got := string(a.promptValue); got != "victim" {
+		t.Fatalf("prompt value: got %q, want %q", got, "victim")
+	}
+}
+
+// TestMenuRenameFolder_RefusesRoot mirrors menuDeleteFolder's
+// guard. Renaming the project root would invalidate the editor's
+// own working directory and confuse every open tab — must be a
+// no-op even if some future caller sets activeFolder to root.
+func TestMenuRenameFolder_RefusesRoot(t *testing.T) {
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	a.setActiveFolder(root)
+
+	a.menuRenameFolder()
+	if a.promptOpen {
+		t.Fatal("root should not open the rename prompt")
+	}
+}
+
+// TestRenameFolderLabel_DynamicSuffix matches the delete-folder
+// label test — bare label at root, "(subdir/)" suffix elsewhere
+// so the user sees what's about to be renamed before clicking.
+func TestRenameFolderLabel_DynamicSuffix(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "src")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+
+	a.setActiveFolder(root)
+	if got := a.renameFolderLabel(); got != "Rename folder" {
+		t.Fatalf("root label = %q", got)
+	}
+
+	a.setActiveFolder(sub)
+	got := a.renameFolderLabel()
+	if !strings.Contains(got, "src") {
+		t.Fatalf("subdir label should mention folder, got %q", got)
+	}
+}
+
 // TestMenuDeleteFolder_Confirms walks the happy path: with a real
 // active folder, menuDeleteFolder opens the confirm modal and the
 // Yes branch removes the folder from disk plus resets activeFolder
@@ -264,13 +401,13 @@ func TestMenuDeleteFolder_RefusesRoot(t *testing.T) {
 	}
 }
 
-// TestHasDeletableFolder_Predicate pins the menu enable rule: true
+// TestHasActiveSubfolder_Predicate pins the menu enable rule: true
 // when activeFolder points at a real subdirectory, false for the
 // root, an empty active folder, or a folder that's been deleted
 // externally. The menu row uses this to dim itself when the action
 // would no-op, so a regression here would let the user click into
 // a flash they can't act on.
-func TestHasDeletableFolder_Predicate(t *testing.T) {
+func TestHasActiveSubfolder_Predicate(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "live")
 	if err := os.Mkdir(sub, 0755); err != nil {
@@ -279,24 +416,24 @@ func TestHasDeletableFolder_Predicate(t *testing.T) {
 	a := newTestApp(t, root)
 
 	a.setActiveFolder(root)
-	if a.hasDeletableFolder() {
+	if a.hasActiveSubfolder() {
 		t.Fatal("root should not be deletable")
 	}
 
 	a.activeFolder = ""
-	if a.hasDeletableFolder() {
+	if a.hasActiveSubfolder() {
 		t.Fatal("empty active folder should not be deletable")
 	}
 
 	a.setActiveFolder(sub)
-	if !a.hasDeletableFolder() {
+	if !a.hasActiveSubfolder() {
 		t.Fatal("real subfolder should be deletable")
 	}
 
 	if err := os.Remove(sub); err != nil {
 		t.Fatalf("remove for stale test: %v", err)
 	}
-	if a.hasDeletableFolder() {
+	if a.hasActiveSubfolder() {
 		t.Fatal("stale (externally-removed) folder should not be deletable")
 	}
 }

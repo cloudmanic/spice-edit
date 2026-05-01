@@ -300,13 +300,121 @@ func (a *App) menuDelete() {
 	)
 }
 
+// doRenameFolder renames oldPath to a sibling whose basename is
+// newName, refreshes the tree, and rewrites every open tab whose
+// file lives under the renamed directory so the buffers don't end
+// up backed by a stale path. Reuses renameFile under the hood since
+// os.Rename works on directories the same as files.
+//
+// The descendant-tab path-rewriting case is what doRenameFile lacks:
+// renaming /proj/foo to /proj/bar must also point a tab at
+// /proj/foo/main.go to /proj/bar/main.go. tabPathRemoved-style
+// prefix matching with the trailing separator avoids the
+// /proj/foo vs /proj/foobar collision a substring match would hit.
+func (a *App) doRenameFolder(oldPath, newName string) {
+	newName = trimSpace(newName)
+	if newName == "" {
+		return
+	}
+	if strings.ContainsAny(newName, string(os.PathSeparator)+"/\\") {
+		a.flash("Folder name can't contain a path separator")
+		return
+	}
+	newPath := filepath.Join(filepath.Dir(oldPath), newName)
+	if err := renameFile(oldPath, newPath); err != nil {
+		a.flash(fmt.Sprintf("Rename failed: %v", err))
+		return
+	}
+	prefix := oldPath + string(filepath.Separator)
+	for _, t := range a.tabs {
+		switch {
+		case t.Path == oldPath:
+			// Defensive — tabs shouldn't be backed by directories,
+			// but if one is we still rewrite it cleanly.
+			t.Path = newPath
+		case strings.HasPrefix(t.Path, prefix):
+			t.Path = filepath.Join(newPath, t.Path[len(prefix):])
+		default:
+			continue
+		}
+		if info, err := os.Stat(t.Path); err == nil {
+			t.Mtime = info.ModTime()
+		} else {
+			t.Mtime = time.Time{}
+		}
+		t.DiskGone = false
+	}
+	// Keep activeFolder in sync. If we don't, the next "New file"
+	// would target the deleted path and fail confusingly.
+	if a.activeFolder == oldPath || strings.HasPrefix(a.activeFolder, prefix) {
+		if a.activeFolder == oldPath {
+			a.setActiveFolder(newPath)
+		} else {
+			a.setActiveFolder(filepath.Join(newPath, a.activeFolder[len(prefix):]))
+		}
+	}
+	a.tree.Refresh()
+	a.refreshGitStatus()
+	a.flash(fmt.Sprintf("Renamed to %s", newName))
+}
+
+// menuRenameFolder opens a prompt pre-filled with the active
+// folder's basename and renames the directory on submit. Mirrors
+// menuRename but targets a folder rather than a file. The project
+// root is gated out by hasActiveSubfolder so this never fires when
+// rooted on the working dir itself.
+func (a *App) menuRenameFolder() {
+	a.closeMenu()
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return
+	}
+	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+		return
+	}
+	old := folder
+	a.openPrompt(
+		"Rename folder",
+		"in "+filepath.Dir(old),
+		filepath.Base(old),
+		func(app *App, value string) {
+			app.doRenameFolder(old, value)
+		},
+	)
+}
+
+// renameFolderLabel is the dynamic label hook for the Rename Folder
+// menu row. Same shape as deleteFolderLabel — bare label at root,
+// "(subdir/)" suffix otherwise. Without the suffix the user would
+// have no way to tell what's about to be renamed before clicking.
+func (a *App) renameFolderLabel() string {
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return "Rename folder"
+	}
+	rel := a.relativeFolderLabel(folder)
+	const maxLen = 28
+	suffix := " (" + rel + ")"
+	if runeLen(suffix) > maxLen {
+		keep := maxLen - len(" (…)")
+		if keep < 4 {
+			keep = 4
+		}
+		if keep < len(rel) {
+			rel = "…" + rel[len(rel)-keep:]
+		}
+		suffix = " (" + rel + ")"
+	}
+	return "Rename folder" + suffix
+}
+
 // menuDeleteFolder removes the editor's active folder (the same folder
 // the New File entry targets) and everything inside it. Lives in the
 // main menu so folder deletion has a discoverable, non-right-click
 // path — macOS Terminal eats Button3, and the project's CLAUDE.md
 // rule says every file action must be reachable from the ≡ menu.
 //
-// The project root is never deletable — hasDeletableFolder gates the
+// The project root is never deletable — hasActiveSubfolder gates the
 // row out for that case so the user can't even see the action when
 // it would be destructive enough to take down the whole session.
 func (a *App) menuDeleteFolder() {
@@ -360,11 +468,11 @@ func (a *App) deleteFolderLabel() string {
 	return "Delete folder" + suffix
 }
 
-// hasDeletableFolder is the menu predicate: the row is enabled when
-// the active folder exists, isn't the project root, and isn't empty
-// state. Lives next to hasFileTab so the file/folder predicates form
-// a matched pair.
-func (a *App) hasDeletableFolder() bool {
+// hasActiveSubfolder is the menu predicate shared by every "act on
+// the active folder" row (Delete, Rename, …). True when activeFolder
+// points at a real subdirectory of the project root. Lives next to
+// hasFileTab so the file/folder predicates form a matched pair.
+func (a *App) hasActiveSubfolder() bool {
 	folder := a.activeFolder
 	if folder == "" || folder == a.rootDir {
 		return false
