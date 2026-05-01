@@ -234,6 +234,12 @@ func (a *App) openFormatInstallPrompt(idx int, ext string, argv []string) {
 		// the prompt was really opt-in, not a leftover dismissal.
 		app.persistTrust(root, hash, true)
 		app.persistInstallDecline(root, ext, false)
+		// Refresh the file tree immediately so the new
+		// .spiceedit/format.json appears in the sidebar without
+		// waiting for the 10-second tick. Same pair fileops.go uses
+		// after every other directory mutation we make.
+		app.tree.Refresh()
+		app.refreshGitStatus()
 		app.execFormatter(tabPath, argv)
 	})
 	a.confirmCancelHook = func(app *App) {
