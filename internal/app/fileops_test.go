@@ -463,6 +463,51 @@ func TestDeleteFolderLabel_DynamicSuffix(t *testing.T) {
 	}
 }
 
+// TestDynamicLabels_FitInModal pins down the regression that motivated
+// the modalWidth bump: a realistic long folder name (e.g. a domain
+// like "spicermatthews.com") used to leak past the right edge of the
+// action menu and bleed onto the editor underneath. Every dynamic
+// label hook must produce a string that fits inside the modal's
+// interior cell budget — otherwise the visual overflow returns.
+//
+// The interior budget is modalWidth minus the leading "▸ " indent
+// (drawn at mx+4) and one cell of right padding, so the constraint
+// is runeLen(label) <= modalWidth - 5.
+func TestDynamicLabels_FitInModal(t *testing.T) {
+	root := t.TempDir()
+	// Deliberately picks a folder name longer than what fit in the
+	// pre-fix modalWidth=38 — this is the exact case from the bug
+	// report where "spicermatthews.com" overflowed the right edge.
+	sub := filepath.Join(root, "spicermatthews.com")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.setActiveFolder(sub)
+
+	maxFit := modalWidth - 5
+	for _, c := range []struct {
+		name  string
+		label string
+	}{
+		{"newFileLabel", a.newFileLabel()},
+		{"renameFolderLabel", a.renameFolderLabel()},
+		{"deleteFolderLabel", a.deleteFolderLabel()},
+	} {
+		if runeLen(c.label) > maxFit {
+			t.Errorf("%s = %q (%d runes) overflows modal interior (%d cells)",
+				c.name, c.label, runeLen(c.label), maxFit)
+		}
+		// Sanity: label still mentions the folder so the user can tell
+		// what's about to be acted on. Truncation must not erase the
+		// trailing folder name — that's the most informative part.
+		if !strings.Contains(c.label, "spicermatthews.com") &&
+			!strings.Contains(c.label, "thews.com") {
+			t.Errorf("%s = %q dropped the folder name entirely", c.name, c.label)
+		}
+	}
+}
+
 // TestTabPathRemoved_UnrelatedSafe sanity-checks the negative case:
 // a tab outside the deleted path stays open. This is the everyday
 // path during a regular file delete.
