@@ -279,31 +279,25 @@ func (t *Tree) isDirty(n *Node) bool {
 // withIcons=true prefixes the name with a Nerd Font glyph + space; off
 // renders the legacy chevron-only look for terminals that can't show
 // the private-use glyphs.
+//
+// When icons are enabled the row is rendered in three segments
+// (prefix → glyph → name) so the glyph can take its own per-language
+// colour while the name keeps the row's normal fg/dirty/active
+// styling. That's the visual cue you find in nvim-tree and friends:
+// a quick eye-scan picks out Go from Ruby from Markdown without
+// reading any text.
 func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active, dirty, withIcons bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
-	var line string
+
+	// Compute the row-level foreground (active/dirty/normal cascade).
 	var fg tcell.Color
 	if item.Node.IsDir {
-		chev := "▸"
-		if item.Node.Expanded {
-			chev = "▾"
-		}
-		if withIcons {
-			line = " " + indent + chev + " " + icons.For(item.Node.Name, true, item.Node.Expanded) + "  " + item.Node.Name + "/"
-		} else {
-			line = " " + indent + chev + " " + item.Node.Name + "/"
-		}
 		fg = th.FolderColor
 		if active {
 			fg = th.Accent
 		}
 	} else {
-		if withIcons {
-			line = " " + indent + "  " + icons.For(item.Node.Name, false, false) + "  " + item.Node.Name
-		} else {
-			line = " " + indent + "  " + item.Node.Name
-		}
 		fg = th.FileColor
 	}
 	// Dirty wins over the normal foreground but the active-folder bold
@@ -312,11 +306,47 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	if dirty {
 		fg = th.Modified
 	}
-	style := tcell.StyleDefault.Background(bg).Foreground(fg)
+	rowStyle := tcell.StyleDefault.Background(bg).Foreground(fg)
 	if active {
-		style = style.Bold(true)
+		rowStyle = rowStyle.Bold(true)
 	}
-	drawString(scr, x, y, w, line, style)
+
+	// Build the left chunk (indent + chevron + space) and right chunk
+	// (name, with a trailing slash for dirs). Both render in rowStyle;
+	// only the glyph between them gets its own colour.
+	var prefix, suffix string
+	if item.Node.IsDir {
+		chev := "▸"
+		if item.Node.Expanded {
+			chev = "▾"
+		}
+		prefix = " " + indent + chev + " "
+		suffix = item.Node.Name + "/"
+	} else {
+		prefix = " " + indent + "  "
+		suffix = item.Node.Name
+	}
+
+	if !withIcons {
+		drawString(scr, x, y, w, prefix+suffix, rowStyle)
+		return
+	}
+
+	glyph := icons.For(item.Node.Name, item.Node.IsDir, item.Node.Expanded)
+	glyphFg := icons.ColorFor(item.Node.Name, item.Node.IsDir, fg)
+	// Dirty files keep their per-language glyph colour — the language
+	// hue is the at-a-glance cue, and the name turning Modified is
+	// already enough to flag "this is dirty".
+	glyphStyle := tcell.StyleDefault.Background(bg).Foreground(glyphFg)
+	if active {
+		glyphStyle = glyphStyle.Bold(true)
+	}
+
+	drawString(scr, x, y, w, prefix, rowStyle)
+	px := len([]rune(prefix))
+	drawString(scr, x+px, y, w-px, glyph, glyphStyle)
+	gx := len([]rune(glyph))
+	drawString(scr, x+px+gx, y, w-px-gx, "  "+suffix, rowStyle)
 }
 
 // drawString writes s left-aligned within [x, x+w). Excess content is

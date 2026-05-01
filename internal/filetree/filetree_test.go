@@ -747,6 +747,50 @@ func TestRender_IconsEnabledShowsFileGlyph(t *testing.T) {
 	}
 }
 
+// TestRender_IconsEnabledColoursGlyphPerLanguage proves the glyph cell
+// is drawn in icons.ColorFor's mapped colour rather than the row's
+// regular file fg. Without this, every glyph would inherit the same
+// FileColor and the visual cue (Go cyan / Markdown blue / etc.) would
+// be lost.
+func TestRender_IconsEnabledColoursGlyphPerLanguage(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.IconsEnabled = true
+	alpha := findChild(tr.Root, "alpha")
+	tr.Toggle(alpha)
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	rowY := findRowY(cells, w, 20, "inner.go")
+	if rowY < 0 {
+		t.Fatal("could not find inner.go row")
+	}
+
+	// Locate the cell carrying the .go glyph and assert its fg is the
+	// per-language colour, not the row's FileColor.
+	wantGlyph := []rune(icons.For("inner.go", false, false))[0]
+	wantColor := icons.ColorFor("inner.go", false, theme.Default().FileColor)
+	found := false
+	for x := 0; x < w; x++ {
+		c := cells[rowY*w+x]
+		if len(c.Runes) == 0 || c.Runes[0] != wantGlyph {
+			continue
+		}
+		fg, _, _ := c.Style.Decompose()
+		if fg != wantColor {
+			t.Fatalf("glyph fg = %v, want %v (per-language)", fg, wantColor)
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatalf("no cell carried glyph %q on inner.go row", string(wantGlyph))
+	}
+}
+
 // TestRender_IconsEnabledFolderOpenSwitches verifies the open/closed
 // folder glyph pair flips correctly when the user expands a folder —
 // the visual cue most users will rely on more than the chevron.

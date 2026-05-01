@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gdamore/tcell/v2"
+
 	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
 )
 
@@ -141,6 +143,56 @@ func TestDetectViaFilesystemRejectsWrongExtension(t *testing.T) {
 	}
 	if walkForNerdFont(dir) {
 		t.Fatalf("non-font with 'nerd' in name should not match")
+	}
+}
+
+// TestColorForFolderUsesFallback pins the rule that folders inherit
+// the row's row-level fg — the file tree relies on this so the active
+// folder still tints with th.Accent and dirty folders still flip to
+// th.Modified instead of getting overwritten by a language colour.
+func TestColorForFolderUsesFallback(t *testing.T) {
+	fb := tcell.NewRGBColor(1, 2, 3)
+	if got := ColorFor("anything", true, fb); got != fb {
+		t.Fatalf("folder ColorFor = %v, want fallback %v", got, fb)
+	}
+}
+
+// TestColorForKnownExtension verifies the extension lookup actually
+// returns a per-language colour distinct from the fallback — proves
+// the map is wired up rather than every call returning fallback.
+func TestColorForKnownExtension(t *testing.T) {
+	fb := tcell.NewRGBColor(1, 2, 3)
+	got := ColorFor("main.go", false, fb)
+	if got == fb {
+		t.Fatalf("ColorFor(main.go) returned fallback; expected the .go entry")
+	}
+	if want := extColors[".go"]; got != want {
+		t.Fatalf("ColorFor(main.go) = %v, want %v", got, want)
+	}
+}
+
+// TestColorForKnownName covers the full-name lookup tier — Dockerfile
+// has no extension, so without nameColors it would fall through to
+// the fallback colour, which is exactly the bug we're guarding here.
+func TestColorForKnownName(t *testing.T) {
+	fb := tcell.NewRGBColor(1, 2, 3)
+	got := ColorFor("Dockerfile", false, fb)
+	if got == fb {
+		t.Fatalf("Dockerfile fell through to fallback; nameColors wiring broken")
+	}
+	if want := nameColors["dockerfile"]; got != want {
+		t.Fatalf("ColorFor(Dockerfile) = %v, want %v", got, want)
+	}
+}
+
+// TestColorForUnknownReturnsFallback verifies the silent-fallback
+// path: anything we haven't mapped renders in the row's regular fg
+// rather than some default colour that would visually lie about the
+// file's type.
+func TestColorForUnknownReturnsFallback(t *testing.T) {
+	fb := tcell.NewRGBColor(7, 8, 9)
+	if got := ColorFor("mystery.xyzzy", false, fb); got != fb {
+		t.Fatalf("unknown ext ColorFor = %v, want fallback %v", got, fb)
 	}
 }
 

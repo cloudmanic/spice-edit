@@ -37,6 +37,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/gdamore/tcell/v2"
+
 	"github.com/cloudmanic/spice-edit/internal/spiceconfig"
 )
 
@@ -258,6 +260,103 @@ var nameIcons = map[string]string{
 	"readme.md":      "", //  markdown (kept here so we can promote it later)
 	"license":        "", //  license
 	"license.md":     "", //  license
+}
+
+// extColors maps lowercase file extensions to their canonical
+// language brand colour. The palette is deliberately recognisable
+// (Go's gopher cyan, Ruby's red, Rust's burnt orange) rather than a
+// pure design choice — users glance at the icon and want to know the
+// language at once. Unmapped extensions return the row's normal
+// foreground via ColorFor's fallback so the row still reads cleanly.
+var extColors = map[string]tcell.Color{
+	".go":        tcell.NewRGBColor(0, 173, 216),
+	".py":        tcell.NewRGBColor(255, 212, 59),
+	".js":        tcell.NewRGBColor(240, 219, 79),
+	".jsx":       tcell.NewRGBColor(97, 218, 251),
+	".ts":        tcell.NewRGBColor(49, 120, 198),
+	".tsx":       tcell.NewRGBColor(97, 218, 251),
+	".rs":        tcell.NewRGBColor(222, 165, 132),
+	".c":         tcell.NewRGBColor(101, 154, 210),
+	".h":         tcell.NewRGBColor(101, 154, 210),
+	".cpp":       tcell.NewRGBColor(101, 154, 210),
+	".cc":        tcell.NewRGBColor(101, 154, 210),
+	".hpp":       tcell.NewRGBColor(101, 154, 210),
+	".java":      tcell.NewRGBColor(176, 114, 25),
+	".rb":        tcell.NewRGBColor(204, 52, 45),
+	".php":       tcell.NewRGBColor(120, 119, 184),
+	".html":      tcell.NewRGBColor(227, 76, 38),
+	".htm":       tcell.NewRGBColor(227, 76, 38),
+	".css":       tcell.NewRGBColor(99, 154, 209),
+	".scss":      tcell.NewRGBColor(204, 102, 153),
+	".sass":      tcell.NewRGBColor(204, 102, 153),
+	".json":      tcell.NewRGBColor(203, 203, 65),
+	".yaml":      tcell.NewRGBColor(203, 65, 65),
+	".yml":       tcell.NewRGBColor(203, 65, 65),
+	".toml":      tcell.NewRGBColor(156, 102, 31),
+	".md":        tcell.NewRGBColor(81, 154, 186),
+	".markdown":  tcell.NewRGBColor(81, 154, 186),
+	".sh":        tcell.NewRGBColor(78, 170, 37),
+	".bash":      tcell.NewRGBColor(78, 170, 37),
+	".zsh":       tcell.NewRGBColor(78, 170, 37),
+	".fish":      tcell.NewRGBColor(78, 170, 37),
+	".sql":       tcell.NewRGBColor(218, 216, 216),
+	".png":       tcell.NewRGBColor(168, 80, 165),
+	".jpg":       tcell.NewRGBColor(168, 80, 165),
+	".jpeg":      tcell.NewRGBColor(168, 80, 165),
+	".gif":       tcell.NewRGBColor(168, 80, 165),
+	".svg":       tcell.NewRGBColor(255, 165, 0),
+	".webp":      tcell.NewRGBColor(168, 80, 165),
+	".vue":       tcell.NewRGBColor(65, 184, 131),
+	".swift":     tcell.NewRGBColor(252, 132, 90),
+	".kt":        tcell.NewRGBColor(247, 137, 24),
+	".dart":      tcell.NewRGBColor(0, 180, 171),
+	".lua":       tcell.NewRGBColor(81, 154, 186),
+	".vim":       tcell.NewRGBColor(129, 184, 14),
+	".lock":      tcell.NewRGBColor(186, 144, 91),
+	".log":       tcell.NewRGBColor(143, 143, 143),
+	".env":       tcell.NewRGBColor(250, 204, 45),
+}
+
+// nameColors handles full-filename matches (Dockerfile, Makefile,
+// go.mod, etc.) where extension lookup wouldn't catch them or where
+// the canonical brand colour differs from the generic extension's.
+var nameColors = map[string]tcell.Color{
+	"dockerfile":     tcell.NewRGBColor(36, 150, 237),
+	"makefile":       tcell.NewRGBColor(106, 153, 85),
+	"gnumakefile":    tcell.NewRGBColor(106, 153, 85),
+	"go.mod":         tcell.NewRGBColor(0, 173, 216),
+	"go.sum":         tcell.NewRGBColor(0, 173, 216),
+	".gitignore":     tcell.NewRGBColor(240, 80, 51),
+	".gitattributes": tcell.NewRGBColor(240, 80, 51),
+	".gitmodules":    tcell.NewRGBColor(240, 80, 51),
+	".env":           tcell.NewRGBColor(250, 204, 45),
+	"license":        tcell.NewRGBColor(204, 200, 79),
+	"license.md":     tcell.NewRGBColor(204, 200, 79),
+	"readme.md":      tcell.NewRGBColor(81, 154, 186),
+}
+
+// ColorFor returns the colour the file tree should draw a node's
+// glyph in. Folders pass through fallback (typically th.FolderColor or
+// th.Accent for the active row) so they stay consistent with the
+// existing palette. Files match nameColors first, then extColors;
+// anything that doesn't match returns fallback so the row still
+// renders cleanly when we don't have an opinion.
+//
+// Taking fallback as a parameter keeps this package free of a theme
+// dependency — the renderer already knows what it would have used,
+// and we just defer to that when our map is silent.
+func ColorFor(name string, isDir bool, fallback tcell.Color) tcell.Color {
+	if isDir {
+		return fallback
+	}
+	low := strings.ToLower(name)
+	if c, ok := nameColors[low]; ok {
+		return c
+	}
+	if c, ok := extColors[strings.ToLower(filepath.Ext(name))]; ok {
+		return c
+	}
+	return fallback
 }
 
 // For returns the Nerd Font glyph that best fits a file tree entry.
