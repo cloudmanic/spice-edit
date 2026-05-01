@@ -27,6 +27,7 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/customactions"
 	"github.com/cloudmanic/spice-edit/internal/editor"
 	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/icons"
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
@@ -1767,5 +1768,92 @@ func TestSplitErrorOutput_TruncatesAndAppendsLogPath(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(body, "\n"), "truncated") {
 		t.Error("expected '… truncated' marker for >maxLines output")
+	}
+}
+
+// TestLayoutTabs_IconsExpandWidth pins down the geometry contract:
+// turning icons on grows each tab by exactly two cells (the glyph + a
+// separator space), and the close-× column shifts right by the same
+// amount. Without this, a tab-bar click on the × would land on the
+// wrong column whenever icons are enabled.
+func TestLayoutTabs_IconsExpandWidth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(dir, "main.go"))
+
+	a.tree.IconsEnabled = false
+	off := a.layoutTabs()
+	a.tree.IconsEnabled = true
+	on := a.layoutTabs()
+
+	if len(off) != 1 || len(on) != 1 {
+		t.Fatalf("layoutTabs len off=%d on=%d, want 1 each", len(off), len(on))
+	}
+	if on[0].Width != off[0].Width+2 {
+		t.Fatalf("icons should add 2 cells: off=%d on=%d", off[0].Width, on[0].Width)
+	}
+	if on[0].CloseX != off[0].CloseX+2 {
+		t.Fatalf("CloseX should shift by 2 when icons on: off=%d on=%d",
+			off[0].CloseX, on[0].CloseX)
+	}
+}
+
+// TestDrawTabBar_RendersIconWhenEnabled verifies the glyph actually
+// lands on screen between the dirty slot and the file name when
+// icons are enabled. We use the simulation screen and look for the
+// language-specific glyph from icons.For somewhere on the tab row.
+func TestDrawTabBar_RendersIconWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(dir, "main.go"))
+	a.tree.IconsEnabled = true
+
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+
+	// Read the tab-bar row (y=0) and look for the .go glyph.
+	wantGlyph := []rune(icons.For("main.go", false, false))[0]
+	found := false
+	for x := 0; x < w; x++ {
+		c := cells[x]
+		if len(c.Runes) > 0 && c.Runes[0] == wantGlyph {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected .go glyph on the tab-bar row when icons are enabled")
+	}
+}
+
+// TestDrawTabBar_NoIconWhenDisabled is the inverse of the above —
+// flipping IconsEnabled off must remove the glyph from the tab bar
+// (so terminals without a Nerd Font don't see tofu boxes in tabs).
+func TestDrawTabBar_NoIconWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(dir, "main.go"))
+	a.tree.IconsEnabled = false
+
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+
+	wantGlyph := []rune(icons.For("main.go", false, false))[0]
+	for x := 0; x < w; x++ {
+		c := cells[x]
+		if len(c.Runes) > 0 && c.Runes[0] == wantGlyph {
+			t.Fatalf("did not expect glyph %q at x=%d when icons off", string(wantGlyph), x)
+		}
 	}
 }
