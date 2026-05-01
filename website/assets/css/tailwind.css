@@ -739,13 +739,9 @@
     width: 28px;
     height: 28px;
     border-radius: 7px;
-    background: linear-gradient(135deg, var(--color-accent), var(--color-accent-soft));
-    box-shadow: 0 6px 14px -6px rgba(122,162,247,0.5);
-    color: #0b0d18;
-    font-family: var(--font-mono);
-    font-size: 0.9rem;
-    font-weight: 700;
+    box-shadow: 0 6px 14px -6px rgba(122,162,247,0.45);
   }
+  img.glyph { object-fit: contain; }
 
   /* Feature icon — small square containing a stroked SVG */
   .feature-icon {
