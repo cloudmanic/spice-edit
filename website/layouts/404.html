@@ -1,0 +1,36 @@
+{{ define "main" }}
+<section class="relative py-20 lg:py-32 overflow-hidden">
+  <div class="halo" aria-hidden="true"></div>
+  <div class="container-page relative text-center max-w-2xl">
+    <span class="section-eyebrow">Error 404</span>
+    <h1 class="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight"
+        style="color: #fff;">That page got formatted out.</h1>
+    <p class="mt-6 text-lg" style="color: var(--color-text-soft);">
+      The page you were looking for moved, got renamed, or never existed.
+      Head back to <a href="/" style="color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px;">the homepage</a>
+      or browse <a href="/docs/" style="color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px;">the docs</a>.
+    </p>
+
+    <div class="mt-10 flex flex-col sm:flex-row gap-3 justify-center">
+      <a href="/" class="btn btn-primary">Back to home</a>
+      <a href="/docs/" class="btn btn-secondary">Read the docs</a>
+    </div>
+
+    <div class="mt-16 max-w-md mx-auto">
+      <div class="mock-window text-left">
+        <div class="titlebar">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="dot" aria-hidden="true"></span>
+          <span class="dot" aria-hidden="true"></span>
+          <span class="label">spiceedit ~/missing</span>
+        </div>
+        <pre class="m-0 p-4 text-xs" style="background: #0f1018; color: var(--color-text-soft); font-family: var(--font-mono); line-height: 1.6;">
+$ spiceedit /404
+<span style="color: var(--color-error);">error:</span> <span style="color: var(--color-text);">no such file or page</span>
+$ spiceedit /
+<span style="color: var(--color-success);">opening project root…</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+{{ end }}

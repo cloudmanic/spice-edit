@@ -1,0 +1,84 @@
+# =============================================================================
+# File: .github/workflows/pages.yml
+# Builds the spice-edit.com Hugo+Tailwind site under ./website and deploys it
+# to GitHub Pages. Triggers on every push to main that touches website assets,
+# and on workflow_dispatch for manual rebuilds (handy when DNS/CNAME flips).
+#
+# Pages is configured (in repo Settings → Pages) to deploy from "GitHub Actions"
+# rather than a branch — no committed build artifacts. The site source lives in
+# /website; Hugo writes /website/public; the deploy job uploads that directory
+# as a Pages artifact.
+# =============================================================================
+
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# GITHUB_TOKEN scopes Pages needs. Read for checkout, write for the Pages
+# deployment, id-token for the OIDC handshake the deploy action does.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid stomping on an in-progress deploy. A queued newer commit waits for
+# the current one to finish, then takes over — the cancel-in-progress flag
+# means we never publish a stale build over a fresh one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Setup Hugo
+        uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.161.1"
+          extended: true
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Build Tailwind CSS
+        run: npm run build:css
+
+      - name: Build Hugo site
+        # baseURL comes from hugo.toml; --minify trims output. We pin the
+        # destination so the upload step finds it regardless of where Hugo
+        # is launched from.
+        run: hugo --minify --gc --destination public
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

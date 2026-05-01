@@ -1,0 +1,24 @@
+{{/*
+  Reusable styled code block with a copy button. Args:
+    .code  string of code to display (newlines preserved)
+    .lang  syntax language hint (sh, json, etc.) — informational only
+    .id    DOM id used to wire the copy button to the <pre>
+*/}}
+{{ $id := .id | default (printf "code-%d" now.Unix) }}
+<div class="code-block" data-code-block>
+  <pre id="{{ $id }}"><code class="language-{{ .lang | default "text" }}">{{- .code | safeHTML -}}</code></pre>
+  <button
+    type="button"
+    class="copy-btn"
+    data-copy="{{ .code }}"
+    data-copy-label="Copy command"
+    data-copy-toast="Install command copied. Paste in your terminal."
+    aria-label="Copy command"
+    title="Click to copy"
+  >
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="4.5" y="4.5" width="8" height="9" rx="1.5"/>
+      <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/>
+    </svg>
+  </button>
+</div>

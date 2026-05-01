@@ -1,0 +1,63 @@
+baseURL = "https://spice-edit.com/"
+title = "SpiceEdit"
+locale = "en-us"
+defaultContentLanguage = "en"
+enableGitInfo = true
+enableRobotsTXT = true
+disableKinds = ["taxonomy", "term"]
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 4
+  [markup.highlight]
+    noClasses = false
+    style = "tokyonight-night"
+    lineNos = false
+    tabWidth = 2
+
+[params]
+  description = "A mouse-first terminal code editor for SSH workflows. One static Go binary, no setup."
+  github_url = "https://github.com/cloudmanic/spice-edit"
+  brew_tap = "cloudmanic/spice-edit"
+  install_script_url = "https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh"
+  releases_url = "https://github.com/cloudmanic/spice-edit/releases"
+  version = "v0.0.23"
+  ogImage = "/og-image.png"
+
+[outputs]
+  home = ["HTML", "RSS"]
+  section = ["HTML", "RSS"]
+
+[outputFormats]
+  [outputFormats.RSS]
+    mediatype = "application/rss+xml"
+    baseName = "feed"
+
+[sitemap]
+  changefreq = "weekly"
+  priority = 0.5
+  filename = "sitemap.xml"
+
+[menu]
+  [[menu.main]]
+    name = "Docs"
+    url = "/docs/"
+    weight = 10
+  [[menu.main]]
+    name = "Install"
+    url = "/#install"
+    weight = 20
+  [[menu.main]]
+    name = "GitHub"
+    url = "https://github.com/cloudmanic/spice-edit"
+    weight = 30
+    [menu.main.params]
+      external = true
+
+[security]
+  [security.funcs]
+    getenv = ["^HUGO_", "^CI$"]

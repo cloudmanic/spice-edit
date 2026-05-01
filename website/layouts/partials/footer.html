@@ -1,0 +1,41 @@
+<footer class="border-t border-subtle/60 mt-24" style="border-color: var(--color-subtle);">
+  <div class="container-page py-12 grid gap-8 md:grid-cols-4 text-sm">
+
+    <div class="md:col-span-2">
+      <a href="/" class="logo-mark" aria-label="SpiceEdit home">
+        <img src="/favicon.svg" alt="" width="28" height="28" class="glyph" aria-hidden="true" />
+        <span>SpiceEdit</span>
+      </a>
+      <p class="mt-4 max-w-md" style="color: var(--color-text-soft);">
+        Built by Spicer Matthews. See the source at
+        <a href="{{ site.Params.github_url }}" rel="noopener" target="_blank"
+           class="hover:underline" style="color: var(--color-accent);">cloudmanic/spice-edit</a>.
+      </p>
+    </div>
+
+    <div>
+      <h4 class="text-xs uppercase tracking-wider mb-3" style="color: var(--color-muted);">Product</h4>
+      <ul class="space-y-2" style="color: var(--color-text-soft);">
+        <li><a href="/#features" class="hover:underline">Features</a></li>
+        <li><a href="/#install" class="hover:underline">Install</a></li>
+        <li><a href="/docs/" class="hover:underline">Documentation</a></li>
+        <li><a href="{{ site.Params.releases_url }}" rel="noopener" target="_blank" class="hover:underline">Release notes</a></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4 class="text-xs uppercase tracking-wider mb-3" style="color: var(--color-muted);">Resources</h4>
+      <ul class="space-y-2" style="color: var(--color-text-soft);">
+        <li><a href="{{ site.Params.github_url }}" rel="noopener" target="_blank" class="hover:underline">GitHub</a></li>
+        <li><a href="{{ site.Params.github_url }}/issues" rel="noopener" target="_blank" class="hover:underline">Issues</a></li>
+        <li><a href="/docs/faq/" class="hover:underline">FAQ</a></li>
+        <li><a href="/docs/troubleshooting/" class="hover:underline">Troubleshooting</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="container-page pb-10 text-xs flex flex-col md:flex-row md:items-center md:justify-between gap-2"
+       style="color: var(--color-muted);">
+    <span>© 2026 Cloudmanic, LLC. SpiceEdit is open source under the MIT license.</span>
+    <span>{{ site.Params.version }} — latest release</span>
+  </div>
+</footer>

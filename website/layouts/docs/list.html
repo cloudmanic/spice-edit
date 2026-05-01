@@ -1,0 +1,32 @@
+{{ define "main" }}
+<div class="container-page py-10 lg:py-14">
+  <div class="grid lg:grid-cols-[16rem_1fr] gap-10 lg:gap-16">
+    {{ partial "docs-sidebar.html" . }}
+
+    <article class="min-w-0">
+      <header class="mb-10">
+        <span class="section-eyebrow">Documentation</span>
+        <h1 class="text-3xl lg:text-5xl font-semibold tracking-tight" style="color: #fff;">SpiceEdit Docs</h1>
+        <p class="mt-4 text-lg max-w-2xl" style="color: var(--color-text-soft);">
+          {{ .Content | default "Reference for installing, running, and configuring SpiceEdit. Pick a topic from the list below." | safeHTML }}
+        </p>
+      </header>
+
+      {{ $docs := where site.RegularPages "Section" "docs" }}
+      {{ $docs = $docs.ByWeight }}
+      <ul class="grid sm:grid-cols-2 gap-4">
+        {{ range $docs }}
+          <li>
+            <a href="{{ .RelPermalink }}" class="card block h-full">
+              <h3 class="text-lg font-semibold mb-1" style="color: #fff;">{{ .Title }}</h3>
+              <p class="text-sm" style="color: var(--color-text-soft);">
+                {{ with .Params.summary }}{{ . }}{{ else }}{{ .Description | default (.Summary | plainify | truncate 140) }}{{ end }}
+              </p>
+            </a>
+          </li>
+        {{ end }}
+      </ul>
+    </article>
+  </div>
+</div>
+{{ end }}
