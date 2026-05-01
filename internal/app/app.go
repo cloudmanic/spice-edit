@@ -1234,6 +1234,13 @@ func (a *App) flash(msg string) {
 	a.statusUntil = time.Now().Add(statusFlashFor)
 }
 
+// OpenFile opens the file at path in a new tab — or switches to it if
+// it is already open. Exported so main.go can seed the editor with the
+// file the user named on the command line ("spiceedit foo.go"). Thin
+// wrapper around openFile so internal callers keep using the lowercase
+// name and the public surface stays small.
+func (a *App) OpenFile(path string) { a.openFile(path) }
+
 // openFile opens the file at path in a new tab — or switches to it if it is
 // already open in another tab. Errors are surfaced as a flash message.
 // Whatever the path resolves to, its parent becomes the active folder so

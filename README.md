@@ -148,6 +148,10 @@ make install        # builds and installs to $GOPATH/bin
 ```sh
 spiceedit              # opens the current directory
 spiceedit ~/code/app   # opens a specific project root
+spiceedit main.go      # opens a file (project root = its parent dir)
+spiceedit new-file.go  # creates the file on first save (vim-style)
+spiceedit --version    # print version and exit
+spiceedit --help       # print short usage
 ```
 
 Then:
