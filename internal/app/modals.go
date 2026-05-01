@@ -67,6 +67,12 @@ func (a *App) closeAllModals() {
 	a.confirmCallback = nil
 	a.dirtySaveCallback = nil
 	a.dirtyDiscardCallback = nil
+	// confirmCancelHook is parked here so an unrelated confirm modal
+	// opened after a format-trust / format-install prompt can't
+	// accidentally inherit the cancel hook. The flows that need a
+	// hook set it *after* calling openConfirm precisely so this
+	// clear doesn't erase their own arming.
+	a.confirmCancelHook = nil
 	a.dragMode = ""
 	a.stopAutoScroll()
 }
@@ -344,8 +350,17 @@ func (a *App) confirmYes() {
 }
 
 // confirmCancel dismisses the confirm modal without running the callback.
+// If a flow armed confirmCancelHook (today: format-trust deny,
+// format-install decline) we run it after closing the modal. The
+// hook is captured before close so closeAllModals can clear the
+// pointer without losing the handler we're about to fire — same
+// capture-then-close pattern dirtySave / dirtyDiscard use.
 func (a *App) confirmCancel() {
+	hook := a.confirmCancelHook
 	a.closeAllModals()
+	if hook != nil {
+		hook(a)
+	}
 }
 
 // handleConfirmKey processes keyboard input while the confirm modal is open.

@@ -349,6 +349,14 @@ type App struct {
 	// menuLayout. nil / empty when the user hasn't configured any.
 	customActions []customactions.Action
 
+	// confirmCancelHook runs when the active confirm modal is dismissed
+	// without a Yes — i.e. the user picked No, hit Esc, or clicked
+	// outside. Set after openConfirm by flows that want to react to the
+	// negative answer (today: format-trust deny, format-install
+	// decline). closeAllModals clears it so a stale hook can't fire on
+	// an unrelated future modal.
+	confirmCancelHook func(*App)
+
 	quit bool
 }
 
@@ -506,6 +514,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.refreshGitStatus()
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
+	case *formatDoneEvent:
+		a.handleFormatDone(e)
 	}
 }
 
@@ -1289,6 +1299,11 @@ func (a *App) saveTabAt(idx int) bool {
 	}
 	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s", filepath.Base(tab.Path)))
+	// Format-on-save runs after the disk write succeeds, so a broken
+	// formatter never blocks the user's save from landing. The
+	// formatter (when configured + trusted) reloads the buffer
+	// asynchronously via formatDoneEvent — see format.go.
+	a.runFormatOnSave(idx)
 	return true
 }
 
