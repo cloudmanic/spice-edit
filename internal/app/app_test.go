@@ -1461,16 +1461,17 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 }
 
-// TestMenuLayout_PromptedActionEnabledWithoutFile guards the rule
-// that custom actions with prompts stay enabled even when no tab is
-// open — Copy-from-remote is the only path to bring the *first*
-// file into a fresh project, so requiring an existing tab would
-// make the feature unreachable in its primary use case.
-func TestMenuLayout_PromptedActionEnabledWithoutFile(t *testing.T) {
+// TestMenuLayout_CustomActionsAlwaysEnabled pins the rule that the
+// menu never disables a custom action — neither prompted ones (where
+// the form modal owns the file-or-no-file question) nor plain ones
+// (whose commands may not touch $FILE at all, like "brew upgrade").
+// Trying to gate prompt-less actions on hasFileTab guessed wrong
+// for actions like Upgrade SpiceEdit and made them appear broken.
+func TestMenuLayout_CustomActionsAlwaysEnabled(t *testing.T) {
 	a := newTestApp(t, t.TempDir()) // no tabs opened
 
 	a.customActions = []customactions.Action{
-		{Label: "Plain", Command: "echo p"}, // requires a file
+		{Label: "Plain", Command: "echo p"},
 		{Label: "Prompted", Command: "echo q",
 			Prompts: []customactions.Prompt{
 				{Key: "X", Type: customactions.PromptText},
@@ -1490,24 +1491,48 @@ func TestMenuLayout_PromptedActionEnabledWithoutFile(t *testing.T) {
 	if plain == nil || prompted == nil {
 		t.Fatalf("custom actions missing from layout: %v", items)
 	}
-	if plain.enabled(a) {
-		t.Error("plain action should be disabled with no tab open")
+	if !plain.enabled(a) {
+		t.Error("plain action should be enabled even with no tab open")
 	}
 	if !prompted.enabled(a) {
 		t.Error("prompted action should be enabled even with no tab open")
 	}
 }
 
-// TestRunCustomAction_NoFileFlashes covers the guard that prevents a
-// user from running an action with no file open — the menu would
-// disable the row in that case, but defence-in-depth here matters
-// because keyboard activation can race the predicate.
-func TestRunCustomAction_NoFileFlashes(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.customActions = []customactions.Action{{Label: "X", Command: "echo hi"}}
+// TestRunCustomAction_NoFileStillRuns confirms a prompt-less action
+// runs even with no tab open. Earlier the runner short-circuited
+// here with a "no file open" flash, but that gate guessed wrong
+// for $FILE-free commands like "brew upgrade …" — they got blocked
+// even though they had no file dependency at all. The new contract:
+// always run; if a $FILE-dependent command then fails because FILE
+// is empty, the failure surfaces in the info modal with the actual
+// stderr, which is more informative than a generic flash.
+func TestRunCustomAction_NoFileStillRuns(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran.txt")
+	a := newTestApp(t, dir)
+	a.customActions = []customactions.Action{{
+		Label:   "Touch marker",
+		Command: "touch " + marker,
+	}}
 	a.runCustomAction(0)
-	if !strings.Contains(a.statusMsg, "no file open") {
-		t.Fatalf("expected no-file flash, got %q", a.statusMsg)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ev := a.screen.PollEvent()
+		if ev == nil {
+			break
+		}
+		if _, ok := ev.(*customActionDoneEvent); ok {
+			break
+		}
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("command did not run: %v", err)
+	}
+	if strings.Contains(a.statusMsg, "no file open") {
+		t.Errorf("status flash should not mention no file open: %q", a.statusMsg)
 	}
 }
 

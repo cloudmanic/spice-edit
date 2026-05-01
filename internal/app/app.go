@@ -221,20 +221,18 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 		ca := make([]menuItemDef, 0, len(a.customActions))
 		for i := range a.customActions {
 			i := i // capture
-			// Actions with prompts open a form modal and don't depend
-			// on $FILE being set, so they stay enabled even with no
-			// tab open — Copy-from-remote is the headline case where
-			// the user opens the editor specifically to pull a file.
-			// Prompt-less actions still gate on hasFileTab because
-			// their command lines almost certainly reference $FILE.
-			enabled := (*App).hasFileTab
-			if len(a.customActions[i].Prompts) > 0 {
-				enabled = alwaysTrue
-			}
+			// Custom actions are user-defined shell — we don't try to
+			// guess from the command string whether it needs $FILE.
+			// "Upgrade SpiceEdit" obviously doesn't; "Open on
+			// computer" obviously does. Both should be runnable from
+			// the menu; if a $FILE-dependent command is invoked with
+			// no tab open it'll fail with a real error and our info
+			// modal surfaces it. Better that than getting the
+            // heuristic wrong half the time.
 			ca = append(ca, menuItemDef{
 				label:   a.customActions[i].Label,
 				action:  func(app *App) { app.runCustomAction(i) },
-				enabled: enabled,
+				enabled: alwaysTrue,
 			})
 		}
 		// Splice in just before the final group (Quit). builtinMenuGroups
@@ -1769,16 +1767,13 @@ func (a *App) runCustomAction(idx int) {
 	}
 	act := a.customActions[idx]
 
-	// Prompted actions don't require an open tab — Copy-from-remote
-	// works fine with no buffer focused. The non-prompted path keeps
-	// the original guard so `$FILE` actions still flash their old
-	// "no file open" message instead of silently exporting "".
+	// No "is a file open?" guard: custom actions are user-defined
+	// shell, and we don't second-guess what their command line
+	// needs. A $FILE-dependent command run without a tab open will
+	// fail with a real error and route through the info modal,
+	// which is more honest than disabling actions like
+	// "brew upgrade ..." that don't touch FILE at all.
 	if len(act.Prompts) == 0 {
-		tab := a.activeTabPtr()
-		if tab == nil || tab.Path == "" {
-			a.flash("custom action: no file open")
-			return
-		}
 		a.execCustomAction(act, nil)
 		return
 	}
