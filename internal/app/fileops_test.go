@@ -216,6 +216,116 @@ func TestTabPathRemoved_PrefixCollisionSafe(t *testing.T) {
 	}
 }
 
+// TestMenuDeleteFolder_Confirms walks the happy path: with a real
+// active folder, menuDeleteFolder opens the confirm modal and the
+// Yes branch removes the folder from disk plus resets activeFolder
+// back to root so a follow-up New File doesn't try to write into a
+// deleted directory.
+func TestMenuDeleteFolder_Confirms(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "victim")
+	if err := os.MkdirAll(filepath.Join(sub, "deep"), 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+	a.setActiveFolder(sub)
+
+	a.menuDeleteFolder()
+	if !a.confirmOpen {
+		t.Fatal("expected confirm modal to open")
+	}
+	a.confirmHover = 1
+	a.confirmYes()
+
+	if _, err := os.Stat(sub); !os.IsNotExist(err) {
+		t.Fatalf("folder still exists: err=%v", err)
+	}
+	if a.activeFolder != root {
+		t.Fatalf("activeFolder = %q, want project root", a.activeFolder)
+	}
+}
+
+// TestMenuDeleteFolder_RefusesRoot guards the most destructive
+// possibility: the project root must never be deletable from the
+// menu, even if some future caller manages to set activeFolder to
+// it. The early return in menuDeleteFolder is the only thing
+// preventing the editor from rm -rf-ing its own working dir.
+func TestMenuDeleteFolder_RefusesRoot(t *testing.T) {
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	a.setActiveFolder(root)
+
+	a.menuDeleteFolder()
+	if a.confirmOpen {
+		t.Fatal("root folder should not open a confirm modal")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("root vanished: %v", err)
+	}
+}
+
+// TestHasDeletableFolder_Predicate pins the menu enable rule: true
+// when activeFolder points at a real subdirectory, false for the
+// root, an empty active folder, or a folder that's been deleted
+// externally. The menu row uses this to dim itself when the action
+// would no-op, so a regression here would let the user click into
+// a flash they can't act on.
+func TestHasDeletableFolder_Predicate(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "live")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+
+	a.setActiveFolder(root)
+	if a.hasDeletableFolder() {
+		t.Fatal("root should not be deletable")
+	}
+
+	a.activeFolder = ""
+	if a.hasDeletableFolder() {
+		t.Fatal("empty active folder should not be deletable")
+	}
+
+	a.setActiveFolder(sub)
+	if !a.hasDeletableFolder() {
+		t.Fatal("real subfolder should be deletable")
+	}
+
+	if err := os.Remove(sub); err != nil {
+		t.Fatalf("remove for stale test: %v", err)
+	}
+	if a.hasDeletableFolder() {
+		t.Fatal("stale (externally-removed) folder should not be deletable")
+	}
+}
+
+// TestDeleteFolderLabel_DynamicSuffix mirrors the New File label
+// pattern: bare label at root, "(subdir/)" suffix when the active
+// folder is somewhere we'd actually act on. Without this, the menu
+// row would just say "Delete folder" with no hint of which folder —
+// the user could click it not realising what was about to vanish.
+func TestDeleteFolderLabel_DynamicSuffix(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "src")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, root)
+
+	a.setActiveFolder(root)
+	if got := a.deleteFolderLabel(); got != "Delete folder" {
+		t.Fatalf("root label = %q, want bare 'Delete folder'", got)
+	}
+
+	a.setActiveFolder(sub)
+	got := a.deleteFolderLabel()
+	if !strings.Contains(got, "src") {
+		t.Fatalf("subdir label should include folder name, got %q", got)
+	}
+}
+
 // TestTabPathRemoved_UnrelatedSafe sanity-checks the negative case:
 // a tab outside the deleted path stays open. This is the everyday
 // path during a regular file delete.

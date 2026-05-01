@@ -300,6 +300,79 @@ func (a *App) menuDelete() {
 	)
 }
 
+// menuDeleteFolder removes the editor's active folder (the same folder
+// the New File entry targets) and everything inside it. Lives in the
+// main menu so folder deletion has a discoverable, non-right-click
+// path — macOS Terminal eats Button3, and the project's CLAUDE.md
+// rule says every file action must be reachable from the ≡ menu.
+//
+// The project root is never deletable — hasDeletableFolder gates the
+// row out for that case so the user can't even see the action when
+// it would be destructive enough to take down the whole session.
+func (a *App) menuDeleteFolder() {
+	a.closeMenu()
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return
+	}
+	if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+		// The active folder vanished externally — bail rather than
+		// flashing a confusing "Delete failed" once the confirm fires.
+		return
+	}
+	target := folder
+	a.openConfirm(
+		"Delete folder",
+		"Permanently delete "+filepath.Base(target)+" and everything inside?",
+		func(app *App) {
+			app.doDeletePath(target)
+			// After the directory is gone we can't keep activeFolder
+			// pointing at it — fall back to the project root so the
+			// next New File doesn't try to write into a deleted dir.
+			app.setActiveFolder(app.rootDir)
+		},
+	)
+}
+
+// deleteFolderLabel is the dynamic label hook for the Delete Folder
+// menu row. Mirrors newFileLabel: bare "Delete folder" when nothing
+// useful is selected, "Delete folder (subdir/)" when there is — so
+// the user can tell at a glance what's about to vanish before they
+// even open the confirm dialog.
+func (a *App) deleteFolderLabel() string {
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return "Delete folder"
+	}
+	rel := a.relativeFolderLabel(folder)
+	const maxLen = 28
+	suffix := " (" + rel + ")"
+	if runeLen(suffix) > maxLen {
+		keep := maxLen - len(" (…)")
+		if keep < 4 {
+			keep = 4
+		}
+		if keep < len(rel) {
+			rel = "…" + rel[len(rel)-keep:]
+		}
+		suffix = " (" + rel + ")"
+	}
+	return "Delete folder" + suffix
+}
+
+// hasDeletableFolder is the menu predicate: the row is enabled when
+// the active folder exists, isn't the project root, and isn't empty
+// state. Lives next to hasFileTab so the file/folder predicates form
+// a matched pair.
+func (a *App) hasDeletableFolder() bool {
+	folder := a.activeFolder
+	if folder == "" || folder == a.rootDir {
+		return false
+	}
+	info, err := os.Stat(folder)
+	return err == nil && info.IsDir()
+}
+
 // -----------------------------------------------------------------------------
 // Context-menu actions: rename / delete / new-file against a tree node.
 // -----------------------------------------------------------------------------
