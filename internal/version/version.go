@@ -12,4 +12,4 @@ package version
 
 // Version is the SpiceEdit release version, displayed in the menu footer.
 // Bump this constant on each release (or let release automation do it).
-const Version = "0.0.23"
+const Version = "0.0.24"
