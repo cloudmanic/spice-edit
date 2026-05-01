@@ -67,12 +67,12 @@ func (a *App) closeAllModals() {
 	a.confirmCallback = nil
 	a.dirtySaveCallback = nil
 	a.dirtyDiscardCallback = nil
-	// formatDenyArmed is parked here so an unrelated confirm modal
-	// opened after a format-trust prompt can't accidentally inherit
-	// the deny-on-cancel hook. openFormatTrustPrompt sets the flag
-	// *after* calling openConfirm precisely so this clear doesn't
-	// erase its own arming.
-	a.formatDenyArmed = formatDenyContext{}
+	// confirmCancelHook is parked here so an unrelated confirm modal
+	// opened after a format-trust / format-install prompt can't
+	// accidentally inherit the cancel hook. The flows that need a
+	// hook set it *after* calling openConfirm precisely so this
+	// clear doesn't erase their own arming.
+	a.confirmCancelHook = nil
 	a.dragMode = ""
 	a.stopAutoScroll()
 }
@@ -350,12 +350,17 @@ func (a *App) confirmYes() {
 }
 
 // confirmCancel dismisses the confirm modal without running the callback.
-// When the format-trust flow armed this modal, the cancel branch also
-// records a trust denial — that's how a "No" answer is persisted
-// without growing a third callback shape on the modal itself.
+// If a flow armed confirmCancelHook (today: format-trust deny,
+// format-install decline) we run it after closing the modal. The
+// hook is captured before close so closeAllModals can clear the
+// pointer without losing the handler we're about to fire — same
+// capture-then-close pattern dirtySave / dirtyDiscard use.
 func (a *App) confirmCancel() {
-	a.armFormatDenyOnCancel()
+	hook := a.confirmCancelHook
 	a.closeAllModals()
+	if hook != nil {
+		hook(a)
+	}
 }
 
 // handleConfirmKey processes keyboard input while the confirm modal is open.

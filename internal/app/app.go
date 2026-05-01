@@ -349,12 +349,13 @@ type App struct {
 	// menuLayout. nil / empty when the user hasn't configured any.
 	customActions []customactions.Action
 
-	// formatDenyArmed is set when the active confirm modal was opened
-	// by the format-trust flow. confirmCancel consults it so a "No"
-	// (or Esc) records a trust denial — letting us re-use the existing
-	// Yes/No modal instead of growing a third callback shape. See
-	// format.go for the runtime owner.
-	formatDenyArmed formatDenyContext
+	// confirmCancelHook runs when the active confirm modal is dismissed
+	// without a Yes — i.e. the user picked No, hit Esc, or clicked
+	// outside. Set after openConfirm by flows that want to react to the
+	// negative answer (today: format-trust deny, format-install
+	// decline). closeAllModals clears it so a stale hook can't fire on
+	// an unrelated future modal.
+	confirmCancelHook func(*App)
 
 	quit bool
 }

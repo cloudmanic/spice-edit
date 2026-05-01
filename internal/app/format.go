@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cloudmanic/spice-edit/internal/format"
@@ -49,11 +50,18 @@ type formatDoneEvent struct {
 func (e *formatDoneEvent) When() time.Time { return e.when }
 
 // runFormatOnSave is called by saveTabAt after a successful disk
-// write. It's a no-op when the project has no .spiceedit/format.json,
-// when the file's extension isn't configured, when the binary isn't
-// on $PATH, or when the user has previously denied trust for the
-// current config. Trust-unknown opens the prompt and re-enters this
-// function on approval.
+// write. It branches three ways:
+//
+//   - Project format.json has an entry for this extension → trust
+//     check, prompt if needed, then run.
+//   - Project has no entry but global format-defaults.json does →
+//     offer to install the global preference into the project.
+//   - Neither → silent no-op (the spec).
+//
+// Each branch is its own helper so the routing logic stays shallow
+// and easy to follow. Errors loading config files are surfaced once
+// (so a typo isn't silently ignored) but never block the save itself
+// — that already happened before this function was called.
 func (a *App) runFormatOnSave(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
@@ -68,14 +76,24 @@ func (a *App) runFormatOnSave(idx int) {
 		a.flash("format: " + err.Error())
 		return
 	}
-	if cfg == nil {
-		return
-	}
+
 	argv := cfg.CommandFor(tab.Path)
-	if argv == nil {
+	if argv != nil {
+		a.runWithTrust(idx, cfg, argv)
 		return
 	}
 
+	// Project doesn't format this extension. See if the user has a
+	// personal default we can offer to install.
+	a.maybeOfferInstall(idx, tab.Path)
+}
+
+// runWithTrust drives the existing trust-check + run path, factored
+// out so runFormatOnSave can stay a flat router. Behaviour matches
+// the previous monolithic version exactly — denied stays silent,
+// unknown opens the prompt, allowed runs.
+func (a *App) runWithTrust(idx int, cfg *format.Config, argv []string) {
+	tab := a.tabs[idx]
 	trust, err := format.LoadTrust(format.DefaultTrustPath())
 	if err != nil {
 		a.flash("format trust: " + err.Error())
@@ -88,15 +106,65 @@ func (a *App) runFormatOnSave(idx int) {
 		a.openFormatTrustPrompt(idx, cfg, argv)
 		return
 	}
-
 	a.execFormatter(tab.Path, argv)
+}
+
+// maybeOfferInstall checks whether the user has a global default
+// formatter for this file's extension and, if so, prompts them to
+// install it into the project's .spiceedit/format.json. Skips
+// silently when:
+//
+//   - no global defaults file exists (the common case for users
+//     who haven't set personal preferences),
+//   - the user's defaults don't cover this extension,
+//   - the user already declined the install for this (project, ext),
+//   - the project's format.json exists but is currently denied at
+//     the trust level — piling on an install prompt while trust is
+//     denied would be confusing UX.
+func (a *App) maybeOfferInstall(idx int, tabPath string) {
+	defaults, err := format.LoadDefaults(format.DefaultsPath())
+	if err != nil {
+		a.flash("format defaults: " + err.Error())
+		return
+	}
+	if defaults == nil {
+		return
+	}
+	argv := defaults.CommandFor(tabPath)
+	if argv == nil {
+		return
+	}
+	ext := strings.TrimPrefix(filepath.Ext(tabPath), ".")
+	if ext == "" {
+		return
+	}
+
+	tf, err := format.LoadTrust(format.DefaultTrustPath())
+	if err != nil {
+		a.flash("format trust: " + err.Error())
+		return
+	}
+	if tf.IsInstallDeclined(a.rootDir, ext) {
+		return
+	}
+	// If a project format.json exists and trust is currently denied,
+	// don't pile on. The user already said no to formatting in this
+	// project; offering to add a new entry would feel like a nag.
+	if cfg, _ := format.Load(a.rootDir); cfg != nil {
+		if tf.CheckTrust(a.rootDir, cfg.Hash()) == format.TrustDenied {
+			return
+		}
+	}
+
+	a.openFormatInstallPrompt(idx, ext, argv)
 }
 
 // openFormatTrustPrompt asks the user whether to allow this project's
 // format.json to run commands on save. Yes records trust + runs the
 // formatter on the file we just saved; No records denial and skips.
-// Cancel (Esc) leaves the trust file alone so the next save will
-// prompt again — the safest non-decision.
+// Cancel (Esc) goes through the same deny path as No — there's no
+// safe "decide later" because every save would re-fire the prompt,
+// training the user to dismiss it without thinking.
 //
 // We capture the loaded *format.Config (not a fresh re-Load) so the
 // hash we trust is the exact one we evaluated, not whatever the file
@@ -108,61 +176,99 @@ func (a *App) openFormatTrustPrompt(idx int, cfg *format.Config, argv []string) 
 	}
 	tab := a.tabs[idx]
 	tabPath := tab.Path
+	root := a.rootDir
+	hash := cfg.Hash()
 
-	// Two prompts back to back is jarring, so we use the existing
-	// confirm modal — Yes/No — and treat Esc as "ask again later."
-	// The trust file is updated only on an explicit Yes or No.
 	msg := fmt.Sprintf("Allow %s to run formatters on save?", filepath.Join(format.ConfigDir, format.ConfigFile))
 	a.openConfirm("Trust this project's formatter?", msg, func(app *App) {
 		// Yes — record allow, persist, and run.
-		tf, _ := format.LoadTrust(format.DefaultTrustPath())
-		if tf == nil {
-			tf = &format.TrustFile{Projects: map[string]format.TrustEntry{}}
-		}
-		tf.SetTrust(app.rootDir, cfg.Hash(), true)
-		if err := format.SaveTrust(format.DefaultTrustPath(), tf); err != nil {
-			app.flash("format trust: " + err.Error())
-			// Best-effort: still run this once even if persistence failed;
-			// the user already approved, and the alternative is silently
-			// dropping their click.
-		}
+		app.persistTrust(root, hash, true)
 		app.execFormatter(tabPath, argv)
 	})
-	// We piggy-back the deny path on confirmCancel to avoid bolting a
-	// third "no" callback onto the existing modal. The wrapper here
-	// records denial only; the modal still dismisses normally on Esc.
-	a.formatDenyArmed = formatDenyContext{rootDir: a.rootDir, hash: cfg.Hash(), armed: true}
-}
-
-// formatDenyContext is a small holder that lets the confirm modal's
-// "No" branch record a trust denial without us needing a second
-// callback shape. handleConfirmKey / handleConfirmMouse consult it
-// when they fire confirmCancel — see modals.go.
-type formatDenyContext struct {
-	rootDir string
-	hash    string
-	armed   bool
-}
-
-// armFormatDenyOnCancel returns true and records a denial when the
-// confirm modal's cancel branch was set up by the format-trust flow.
-// Returns false otherwise so the same cancel branch can be reused
-// for non-format prompts (today: Delete) without side effects.
-func (a *App) armFormatDenyOnCancel() bool {
-	if !a.formatDenyArmed.armed {
-		return false
+	// Cancel/No path: persist a denial so we don't re-prompt every
+	// save. We pin this on confirmCancelHook (cleared by
+	// closeAllModals) so an unrelated future confirm modal can't
+	// inherit the side effect.
+	a.confirmCancelHook = func(app *App) {
+		app.persistTrust(root, hash, false)
 	}
-	ctx := a.formatDenyArmed
-	a.formatDenyArmed = formatDenyContext{}
+}
+
+// openFormatInstallPrompt asks whether to install the user's global
+// default formatter for this extension into the project's
+// .spiceedit/format.json. Yes merges the entry, auto-trusts the
+// resulting config (the user's consent here implies trust — same
+// reasoning as "you wrote the file yourself"), and runs the
+// formatter on the freshly-saved file. No persists a per-extension
+// decline so the prompt won't fire on every save in this project.
+//
+// The prompt uses the same Yes/No confirm modal as the trust prompt
+// so we stay within the existing modal vocabulary instead of
+// inventing a new shape for one feature.
+func (a *App) openFormatInstallPrompt(idx int, ext string, argv []string) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	tab := a.tabs[idx]
+	tabPath := tab.Path
+	root := a.rootDir
+	// Use just the executable name (argv[0]) in the prompt — the
+	// full argv with flags would crowd the modal and most of the
+	// time the user only cares which formatter is being added.
+	formatterName := argv[0]
+
+	title := "Install formatter for this project?"
+	msg := fmt.Sprintf("Add %s for .%s to %s?", formatterName, ext,
+		filepath.Join(format.ConfigDir, format.ConfigFile))
+
+	a.openConfirm(title, msg, func(app *App) {
+		// Yes — merge into project config, trust the new hash, run.
+		hash, err := format.InstallCommandIntoProject(root, ext, argv)
+		if err != nil {
+			app.flash("install failed: " + err.Error())
+			return
+		}
+		// Auto-trust: the user just consented to the exact contents
+		// they wrote. Re-prompting would be busywork. Also clear any
+		// past "declined" entry for this ext so installing now means
+		// the prompt was really opt-in, not a leftover dismissal.
+		app.persistTrust(root, hash, true)
+		app.persistInstallDecline(root, ext, false)
+		app.execFormatter(tabPath, argv)
+	})
+	a.confirmCancelHook = func(app *App) {
+		app.persistInstallDecline(root, ext, true)
+	}
+}
+
+// persistInstallDecline writes a per-extension install decision to
+// the trust store. Mirrors persistTrust so the Yes / No / Esc
+// branches of the install prompt all share one IO path with
+// consistent error reporting.
+func (a *App) persistInstallDecline(root, ext string, declined bool) {
 	tf, _ := format.LoadTrust(format.DefaultTrustPath())
 	if tf == nil {
 		tf = &format.TrustFile{Projects: map[string]format.TrustEntry{}}
 	}
-	tf.SetTrust(ctx.rootDir, ctx.hash, false)
+	tf.SetInstallDeclined(root, ext, declined)
 	if err := format.SaveTrust(format.DefaultTrustPath(), tf); err != nil {
 		a.flash("format trust: " + err.Error())
 	}
-	return true
+}
+
+// persistTrust writes a trust decision to the on-disk trust store.
+// Pulled out so both the Yes branch (in the trust callback) and the
+// No branch (in the cancel hook) share one error-handling path —
+// they should agree on what "best-effort" means.
+func (a *App) persistTrust(root, hash string, trusted bool) {
+	tf, _ := format.LoadTrust(format.DefaultTrustPath())
+	if tf == nil {
+		tf = &format.TrustFile{Projects: map[string]format.TrustEntry{}}
+	}
+	tf.SetTrust(root, hash, trusted)
+	if err := format.SaveTrust(format.DefaultTrustPath(), tf); err != nil {
+		a.flash("format trust: " + err.Error())
+	}
 }
 
 // execFormatter shells out to argv with the file path already

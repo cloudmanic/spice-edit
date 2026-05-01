@@ -55,9 +55,19 @@ type TrustFile struct {
 // (Trusted=false) so we don't re-prompt every save in a project the
 // user explicitly said no to — the prompt only fires again when the
 // config changes.
+//
+// DeclinedInstalls remembers per-extension "no" answers from the
+// install prompt (the one offered when the user has a global
+// default for a file type but the project's format.json doesn't list
+// it). Without this, every save of a .py file would re-ask "install
+// ruff for .py?" — annoying enough to train the user to dismiss
+// without thinking, defeating the consent model. The slice is keyed
+// only by extension because all install decisions are scoped to the
+// project the entry already lives under.
 type TrustEntry struct {
-	Hash    string `json:"hash"`
-	Trusted bool   `json:"trusted"`
+	Hash             string   `json:"hash"`
+	Trusted          bool     `json:"trusted"`
+	DeclinedInstalls []string `json:"declined_installs,omitempty"`
 }
 
 // TrustDecision is what CheckTrust returns. Three states because
@@ -173,14 +183,82 @@ func (tf *TrustFile) CheckTrust(rootDir, configHash string) TrustDecision {
 // Caller is responsible for persisting via SaveTrust afterwards —
 // keeping write IO out of this method makes tests cheap and lets
 // the app batch saves if it ever needs to.
+//
+// Existing DeclinedInstalls survive a SetTrust call: the user's
+// per-extension "don't ask me about installing X" decisions are
+// independent of whether they trust the project's current
+// format.json. That separation matters when a user trusts v1 of
+// the config, declines an install for `py`, and then v2 of the
+// config arrives — they shouldn't have to re-decline the install
+// just because the trust hash changed.
 func (tf *TrustFile) SetTrust(rootDir, configHash string, trusted bool) {
 	if tf.Projects == nil {
 		tf.Projects = map[string]TrustEntry{}
 	}
-	tf.Projects[canonicalRoot(rootDir)] = TrustEntry{
-		Hash:    configHash,
-		Trusted: trusted,
+	key := canonicalRoot(rootDir)
+	prev := tf.Projects[key]
+	tf.Projects[key] = TrustEntry{
+		Hash:             configHash,
+		Trusted:          trusted,
+		DeclinedInstalls: prev.DeclinedInstalls,
 	}
+}
+
+// IsInstallDeclined reports whether the user has previously said no
+// to the "install <formatter> for .<ext> in this project?" prompt.
+// Returns false for unknown projects so the caller falls through to
+// the prompt — the safe default is "ask once" rather than "silently
+// skip." Extension lookup is case-sensitive on purpose: we already
+// derive ext from filepath.Ext, which preserves case.
+func (tf *TrustFile) IsInstallDeclined(rootDir, ext string) bool {
+	if tf == nil {
+		return false
+	}
+	entry, ok := tf.Projects[canonicalRoot(rootDir)]
+	if !ok {
+		return false
+	}
+	for _, declined := range entry.DeclinedInstalls {
+		if declined == ext {
+			return true
+		}
+	}
+	return false
+}
+
+// SetInstallDeclined toggles the "don't ask again" flag for one
+// extension in one project. declined=true after the user picks No
+// on the install prompt; declined=false (and the slice is pruned)
+// after they install the extension manually or change their mind
+// via a future Yes. The caller persists via SaveTrust.
+//
+// We dedupe on add so a user who somehow saw the prompt twice
+// (e.g. via two saves before persistence completed) doesn't end up
+// with duplicate entries that bloat the file forever.
+func (tf *TrustFile) SetInstallDeclined(rootDir, ext string, declined bool) {
+	if tf.Projects == nil {
+		tf.Projects = map[string]TrustEntry{}
+	}
+	key := canonicalRoot(rootDir)
+	entry := tf.Projects[key]
+
+	if declined {
+		for _, e := range entry.DeclinedInstalls {
+			if e == ext {
+				return
+			}
+		}
+		entry.DeclinedInstalls = append(entry.DeclinedInstalls, ext)
+	} else {
+		filtered := entry.DeclinedInstalls[:0]
+		for _, e := range entry.DeclinedInstalls {
+			if e != ext {
+				filtered = append(filtered, e)
+			}
+		}
+		entry.DeclinedInstalls = filtered
+	}
+	tf.Projects[key] = entry
 }
 
 // canonicalRoot returns the absolute, symlink-resolved form of dir.

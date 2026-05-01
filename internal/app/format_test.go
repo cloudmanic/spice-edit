@@ -8,6 +8,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,6 +40,22 @@ func useTestTrustFile(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "trust.json")
 	t.Setenv("SPICEEDIT_TRUST_FILE", path)
+	return path
+}
+
+// useTestDefaultsFile redirects the global defaults file the same
+// way the trust hook does. Tests that exercise the install flow
+// need both pointed at temp paths so they don't read real user
+// config or leak state across runs.
+func useTestDefaultsFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "format-defaults.json")
+	if body != "" {
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatalf("seed defaults: %v", err)
+		}
+	}
+	t.Setenv("SPICEEDIT_DEFAULTS_FILE", path)
 	return path
 }
 
@@ -95,8 +112,8 @@ func TestRunFormatOnSave_NoConfigIsNoop(t *testing.T) {
 	if a.confirmOpen {
 		t.Fatal("no config should never open a confirm modal")
 	}
-	if a.formatDenyArmed.armed {
-		t.Fatal("no config should not arm format deny")
+	if a.confirmCancelHook != nil {
+		t.Fatal("no config should not install a cancel hook")
 	}
 }
 
@@ -141,8 +158,8 @@ func TestRunFormatOnSave_UnknownTrustOpensPrompt(t *testing.T) {
 	if !a.confirmOpen {
 		t.Fatal("untrusted config should open the trust prompt")
 	}
-	if !a.formatDenyArmed.armed {
-		t.Fatal("trust prompt should arm the deny-on-cancel hook")
+	if a.confirmCancelHook == nil {
+		t.Fatal("trust prompt should install a cancel hook")
 	}
 }
 
@@ -167,30 +184,35 @@ func TestRunFormatOnSave_DeniedIsNoop(t *testing.T) {
 	if a.confirmOpen {
 		t.Fatal("denied trust should not re-prompt")
 	}
-	if a.formatDenyArmed.armed {
-		t.Fatal("denied trust should not arm anything")
+	if a.confirmCancelHook != nil {
+		t.Fatal("denied trust should not install a cancel hook")
 	}
 }
 
-// TestArmFormatDenyOnCancel_PersistsDeny pins the bridge between the
-// confirm modal's cancel branch and the trust file: hitting No (or
-// Esc) on the prompt records a denial so the next save in this
-// project goes silently, not back to another prompt.
-func TestArmFormatDenyOnCancel_PersistsDeny(t *testing.T) {
+// TestTrustPromptCancel_PersistsDeny exercises the bridge between
+// the confirm modal's cancel branch and the trust file: hitting No
+// (or Esc) on the prompt fires the cancel hook, which records a
+// denial so the next save in this project goes silently, not back
+// to another prompt.
+func TestTrustPromptCancel_PersistsDeny(t *testing.T) {
 	trustPath := useTestTrustFile(t)
 	root := t.TempDir()
-	writeFormatConfig(t, root, `{"commands":{"go":["echo"]}}`)
+	writeFormatConfig(t, root, `{"commands":{"go":["echo","ran","$FILE"]}}`)
 	cfg, _ := format.Load(root)
 	a := newTestApp(t, root)
-
-	a.formatDenyArmed = formatDenyContext{rootDir: root, hash: cfg.Hash(), armed: true}
-
-	if !a.armFormatDenyOnCancel() {
-		t.Fatal("expected armFormatDenyOnCancel to consume armed state")
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	if a.formatDenyArmed.armed {
-		t.Fatal("flag should be cleared after consume")
+	openTabAtPath(t, a, target)
+
+	// Run the save flow up to the prompt, then drive cancel directly.
+	a.runFormatOnSave(0)
+	if !a.confirmOpen {
+		t.Fatal("expected trust prompt to be open")
 	}
+	a.confirmCancel()
+
 	tf, err := format.LoadTrust(trustPath)
 	if err != nil {
 		t.Fatalf("reload trust: %v", err)
@@ -200,16 +222,17 @@ func TestArmFormatDenyOnCancel_PersistsDeny(t *testing.T) {
 	}
 }
 
-// TestArmFormatDenyOnCancel_NotArmedReturnsFalse guarantees the hook
-// is inert for non-format confirm modals (today: Delete). Without
-// this isolation, cancelling a Delete prompt could write a stray
-// trust entry for whatever the last format flow had set.
-func TestArmFormatDenyOnCancel_NotArmedReturnsFalse(t *testing.T) {
+// TestConfirmCancel_NoHookIsInert guarantees the cancel branch is
+// inert for non-format confirm modals (today: Delete). Without this
+// isolation, cancelling a Delete prompt could fire a stale hook
+// from a format flow that never finished closing properly.
+func TestConfirmCancel_NoHookIsInert(t *testing.T) {
 	useTestTrustFile(t)
 	a := newTestApp(t, t.TempDir())
-	if a.armFormatDenyOnCancel() {
-		t.Fatal("expected false when not armed")
-	}
+	a.confirmOpen = true
+	a.confirmCancel()
+	// No assertion beyond "did not panic" — the test passes if we
+	// reach this line, since a stray hook would have run side effects.
 }
 
 // TestExecFormatter_RunsAndPostsEvent walks the async happy path: the
@@ -312,6 +335,180 @@ func TestHandleFormatDone_ClosedTabIsNoop(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.handleFormatDone(&formatDoneEvent{tabPath: "/tmp/never-opened.go", label: "fmt"})
 	// No assertion — the test passes if we don't panic.
+}
+
+// -----------------------------------------------------------------------------
+// Install prompt — global defaults flow
+// -----------------------------------------------------------------------------
+
+// TestMaybeOfferInstall_NoDefaultsIsNoop pins the most common case:
+// a user who has never created format-defaults.json should see no
+// prompt, ever, regardless of what the project has configured.
+func TestMaybeOfferInstall_NoDefaultsIsNoop(t *testing.T) {
+	useTestTrustFile(t)
+	useTestDefaultsFile(t, "")
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	openTabAtPath(t, a, target)
+
+	a.runFormatOnSave(0)
+
+	if a.confirmOpen {
+		t.Fatal("missing defaults should never prompt")
+	}
+}
+
+// TestMaybeOfferInstall_OpensPrompt is the headline path: defaults
+// have a command for this extension, project has none, no decline
+// recorded → the install modal opens with a cancel hook armed.
+func TestMaybeOfferInstall_OpensPrompt(t *testing.T) {
+	useTestTrustFile(t)
+	useTestDefaultsFile(t, `{"commands":{"go":["gofmt","-w","$FILE"]}}`)
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	openTabAtPath(t, a, target)
+
+	a.runFormatOnSave(0)
+
+	if !a.confirmOpen {
+		t.Fatal("expected install prompt to open")
+	}
+	if a.confirmCancelHook == nil {
+		t.Fatal("expected cancel hook to be armed for install decline")
+	}
+}
+
+// TestMaybeOfferInstall_AcceptWritesProjectConfig walks the Yes
+// path end to end: the user consents, the project's format.json
+// is created with the default's argv, trust is auto-recorded for
+// the new hash, and the formatter runs against the just-saved file.
+func TestMaybeOfferInstall_AcceptWritesProjectConfig(t *testing.T) {
+	trustPath := useTestTrustFile(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("orig\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Use a fake "formatter" that writes a sentinel so we can confirm
+	// it actually ran. argv[0] is sh — install will be persisted as
+	// the verbatim argv we pass here.
+	defaultsBody := fmt.Sprintf(
+		`{"commands":{"go":["sh","-c","echo formatted > %s"]}}`, target)
+	useTestDefaultsFile(t, defaultsBody)
+
+	a := newTestApp(t, root)
+	openTabAtPath(t, a, target)
+
+	a.runFormatOnSave(0)
+	if !a.confirmOpen {
+		t.Fatal("expected install prompt to open")
+	}
+	// Drive the Yes path manually.
+	a.confirmHover = 1
+	a.confirmYes()
+
+	// Project config should now exist with a "go" entry.
+	cfg, err := format.Load(root)
+	if err != nil {
+		t.Fatalf("load project cfg: %v", err)
+	}
+	if cfg == nil || len(cfg.Commands["go"]) == 0 {
+		t.Fatalf("expected project to have go entry, got %v", cfg)
+	}
+
+	// Trust should record the new hash as allowed.
+	tf, err := format.LoadTrust(trustPath)
+	if err != nil {
+		t.Fatalf("load trust: %v", err)
+	}
+	if d := tf.CheckTrust(root, cfg.Hash()); d != format.TrustAllowed {
+		t.Fatalf("expected TrustAllowed after install, got %v", d)
+	}
+
+	// Wait for the formatter goroutine to land its done event.
+	ev := waitForFormatEvent(t, a)
+	if ev.err != nil {
+		t.Fatalf("formatter failed: %v", ev.err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "formatted\n" {
+		t.Fatalf("file after format: got %q", string(got))
+	}
+}
+
+// TestMaybeOfferInstall_DeclinePersists pins the No path: cancel
+// records a per-extension decline so the next save in this project
+// for the same file type goes silently.
+func TestMaybeOfferInstall_DeclinePersists(t *testing.T) {
+	trustPath := useTestTrustFile(t)
+	useTestDefaultsFile(t, `{"commands":{"go":["gofmt","-w","$FILE"]}}`)
+	root := t.TempDir()
+	a := newTestApp(t, root)
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	openTabAtPath(t, a, target)
+
+	a.runFormatOnSave(0)
+	if !a.confirmOpen {
+		t.Fatal("expected install prompt to open")
+	}
+	a.confirmCancel()
+
+	tf, err := format.LoadTrust(trustPath)
+	if err != nil {
+		t.Fatalf("load trust: %v", err)
+	}
+	if !tf.IsInstallDeclined(root, "go") {
+		t.Fatal("expected install decline persisted for go")
+	}
+
+	// Next save should be silent.
+	a.runFormatOnSave(0)
+	if a.confirmOpen {
+		t.Fatal("declined extension should not re-prompt")
+	}
+}
+
+// TestMaybeOfferInstall_ProjectHasEntryUsesTrustPath confirms the
+// install path doesn't fire when the project already lists this
+// extension — that case belongs to the trust prompt instead.
+func TestMaybeOfferInstall_ProjectHasEntryUsesTrustPath(t *testing.T) {
+	useTestTrustFile(t)
+	useTestDefaultsFile(t, `{"commands":{"go":["pint","$FILE"]}}`)
+	root := t.TempDir()
+	writeFormatConfig(t, root, `{"commands":{"go":["gofmt","-w","$FILE"]}}`)
+	a := newTestApp(t, root)
+	target := filepath.Join(root, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	openTabAtPath(t, a, target)
+
+	a.runFormatOnSave(0)
+
+	// The trust prompt is open — not the install prompt — and its
+	// hook is set. We can't trivially distinguish the two by struct
+	// shape, but the title text and hook signature would differ for
+	// install vs trust. The presence of *some* prompt + the project
+	// config's hash being TrustUnknown is the trust-path signal.
+	if !a.confirmOpen {
+		t.Fatal("expected some prompt to open")
+	}
+	cfg, _ := format.Load(root)
+	tf, _ := format.LoadTrust(format.DefaultTrustPath())
+	if d := tf.CheckTrust(root, cfg.Hash()); d != format.TrustUnknown {
+		t.Fatalf("project trust should be unknown at this point, got %v", d)
+	}
 }
 
 // waitForFormatEvent drains the simulation screen's event queue

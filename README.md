@@ -426,6 +426,41 @@ Two reasonable patterns:
 
 Both work. SpiceEdit doesn't care which you pick.
 
+### Personal defaults — the install prompt
+
+You can list your favorite formatters once globally in
+`~/.config/spiceedit/format-defaults.json` (same shape as the
+project file):
+
+```json
+{
+  "commands": {
+    "go":  ["gofmt", "-w", "$FILE"],
+    "php": ["php-cs-fixer", "fix", "$FILE", "--quiet"],
+    "py":  ["ruff", "format", "$FILE"]
+  }
+}
+```
+
+These never run on their own. Instead, when you save a file in a
+project where:
+
+1. The project's `.spiceedit/format.json` is missing or has no
+   entry for that file's extension, **and**
+2. Your global defaults *do* have an entry for that extension,
+
+…SpiceEdit asks once: **"Add `gofmt` for `.go` to `.spiceedit/format.json`?"**
+
+- **Yes** — merges the entry into the project's config (creating
+  `.spiceedit/format.json` if it didn't exist), auto-trusts the
+  resulting file, and runs the formatter on the save you just made.
+- **No / Esc** — remembered per-extension in the trust file. You
+  won't be re-asked about that file type in this project until you
+  manually edit the project config.
+
+This keeps your personal preferences out of repos that don't want
+them while still making it one click to opt a project in.
+
 ## Project layout
 
 ```

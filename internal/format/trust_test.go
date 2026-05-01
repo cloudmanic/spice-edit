@@ -136,3 +136,73 @@ func TestDefaultTrustPath_Override(t *testing.T) {
 		t.Fatalf("override ignored: got %q", got)
 	}
 }
+
+// TestSetInstallDeclined_AddRemove pins both halves of the install-
+// decline toggle so a future Yes after a No correctly clears the
+// "don't ask" flag — otherwise the user could never opt back in.
+func TestSetInstallDeclined_AddRemove(t *testing.T) {
+	root := t.TempDir()
+	tf := &TrustFile{Projects: map[string]TrustEntry{}}
+
+	tf.SetInstallDeclined(root, "py", true)
+	if !tf.IsInstallDeclined(root, "py") {
+		t.Fatal("expected py declined after add")
+	}
+	tf.SetInstallDeclined(root, "py", false)
+	if tf.IsInstallDeclined(root, "py") {
+		t.Fatal("expected py undeclined after remove")
+	}
+}
+
+// TestSetInstallDeclined_Dedupes guards against the file growing
+// duplicate entries if the prompt somehow fires twice before the
+// first persist completes. Two adds → one entry, no leak.
+func TestSetInstallDeclined_Dedupes(t *testing.T) {
+	root := t.TempDir()
+	tf := &TrustFile{Projects: map[string]TrustEntry{}}
+	tf.SetInstallDeclined(root, "py", true)
+	tf.SetInstallDeclined(root, "py", true)
+
+	entry := tf.Projects[canonicalRoot(root)]
+	if len(entry.DeclinedInstalls) != 1 {
+		t.Fatalf("expected one entry, got %v", entry.DeclinedInstalls)
+	}
+}
+
+// TestIsInstallDeclined_UnknownExtIsFalse covers the default state
+// for fresh extensions — nothing recorded → false → caller proceeds
+// to prompt. Without this default the install prompt would never
+// fire on first-time saves.
+func TestIsInstallDeclined_UnknownExtIsFalse(t *testing.T) {
+	root := t.TempDir()
+	tf := &TrustFile{Projects: map[string]TrustEntry{}}
+	tf.SetInstallDeclined(root, "py", true) // unrelated entry
+
+	if tf.IsInstallDeclined(root, "rb") {
+		t.Fatal("rb should not be declined")
+	}
+	if tf.IsInstallDeclined("/never/seen", "py") {
+		t.Fatal("unknown project should not be declined")
+	}
+}
+
+// TestSetTrust_PreservesDeclinedInstalls is the most important
+// invariant of the combined flow: changing the trust state for a
+// project's format.json (e.g. after the file is edited) must not
+// erase per-extension "don't ask me again" decisions. Otherwise
+// every config edit would re-fire every install prompt the user
+// already dismissed.
+func TestSetTrust_PreservesDeclinedInstalls(t *testing.T) {
+	root := t.TempDir()
+	tf := &TrustFile{Projects: map[string]TrustEntry{}}
+
+	tf.SetTrust(root, "h1", true)
+	tf.SetInstallDeclined(root, "py", true)
+
+	// Simulate format.json being edited: hash changes, trust resets.
+	tf.SetTrust(root, "h2", true)
+
+	if !tf.IsInstallDeclined(root, "py") {
+		t.Fatal("install decline should survive a trust update")
+	}
+}
