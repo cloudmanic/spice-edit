@@ -97,7 +97,38 @@ brew uninstall cloudmanic/spice-edit/spice-edit
 brew untap cloudmanic/spice-edit
 ```
 
-### Other platforms
+### Linux (one-line install script)
+
+The simplest way to drop SpiceEdit onto a Linux box (or any macOS that
+isn't using Homebrew) is the install script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh | sh
+```
+
+It detects your OS / arch, downloads the matching archive from the
+latest [GitHub Release](https://github.com/cloudmanic/spice-edit/releases),
+and drops the `spiceedit` binary into `~/.local/bin` (or `/usr/local/bin`
+when `~/.local/bin` isn't writable). **Re-run the same command to
+upgrade** — it always fetches the latest tagged release.
+
+Override behaviour with environment variables:
+
+```sh
+# Pin to a specific release.
+curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh \
+  | VERSION=v0.0.18 sh
+
+# Install to a custom directory.
+curl -fsSL https://raw.githubusercontent.com/cloudmanic/spice-edit/main/install.sh \
+  | INSTALL_DIR=/opt/bin sh
+```
+
+The script is plain POSIX `sh` — it works on Alpine / BusyBox / any
+SSH target where you don't want to depend on bash. It only needs `tar`
+plus one of `curl` or `wget`.
+
+### Other platforms (manual binary install)
 
 Pre-built binaries for Linux, macOS, and Windows (amd64 + arm64) are
 attached to every [GitHub Release](https://github.com/cloudmanic/spice-edit/releases).
