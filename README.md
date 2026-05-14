@@ -178,20 +178,21 @@ SpiceEdit deliberately avoids `Ctrl+`-style shortcuts (they fight `tmux`,
 real terminal). Instead, **`Esc` is the leader key**: tap `Esc`, then
 within half a second tap one of the letters below.
 
-| Combo       | Action          |
-| ----------- | --------------- |
-| `Esc Esc`   | Open ≡ menu     |
-| `Esc s`     | Save            |
-| `Esc u`     | Undo            |
-| `Esc r`     | Redo            |
-| `Esc w`     | Close tab       |
-| `Esc q`     | Quit            |
-| `Esc n`     | New file        |
-| `Esc t`     | Toggle sidebar  |
-| `Esc f`     | Find in file    |
+| Combo       | Action               |
+| ----------- | -------------------- |
+| `Esc Esc`   | Open ≡ menu          |
+| `Esc s`     | Save                 |
+| `Esc u`     | Undo                 |
+| `Esc r`     | Redo                 |
+| `Esc w`     | Close tab            |
+| `Esc q`     | Quit                 |
+| `Esc n`     | New file             |
+| `Esc t`     | Toggle sidebar       |
+| `Esc /`     | Toggle line comment  |
+| `Esc f`     | Find in file         |
 | `Esc p`     | Find file in project |
 
-A lone `Esc` is harmless — if you don't follow it with a bound letter
+A lone `Esc` is harmless — if you don't follow it with a bound key
 within the window, your next keystroke goes to the editor as normal,
 so accidental `Esc` taps never swallow a real character.
 

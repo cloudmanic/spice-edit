@@ -46,10 +46,10 @@ const (
 	minEditorAfterDrag  = 40
 	minWidth            = 50
 	minHeight           = 24
-	statusFlashFor = 3 * time.Second
-	doubleClickMs  = 500 * time.Millisecond
-	doubleEscMs    = 500 * time.Millisecond
-	wheelLines     = 3
+	statusFlashFor      = 3 * time.Second
+	doubleClickMs       = 500 * time.Millisecond
+	doubleEscMs         = 500 * time.Millisecond
+	wheelLines          = 3
 
 	// treeRefreshInterval is how often the background goroutine kicks off
 	// a file-tree reload so the sidebar stays in sync with on-disk changes
@@ -193,6 +193,7 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
 			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
+			{label: "Toggle line comment", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
 		{
@@ -230,7 +231,7 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 			// the menu; if a $FILE-dependent command is invoked with
 			// no tab open it'll fail with a real error and our info
 			// modal surfaces it. Better that than getting the
-            // heuristic wrong half the time.
+			// heuristic wrong half the time.
 			ca = append(ca, menuItemDef{
 				label:   a.customActions[i].Label,
 				action:  func(app *App) { app.runCustomAction(i) },
@@ -299,9 +300,9 @@ type App struct {
 	lastClick    clickRecord
 	lastTabRects []tabRect
 
-	menuOpen        bool
-	hoveredMenuRow  int       // index into menuItems of the row under the mouse, or -1.
-	lastEscape      time.Time // timestamp of the previous Esc press, for double-tap detection.
+	menuOpen       bool
+	hoveredMenuRow int       // index into menuItems of the row under the mouse, or -1.
+	lastEscape     time.Time // timestamp of the previous Esc press, for double-tap detection.
 
 	// Prompt modal — single-line text input with OK / Cancel. Used by
 	// Rename and New File. See modals.go for render + event handling.
@@ -1704,6 +1705,17 @@ func (a *App) hasSelection() bool {
 	return t != nil && t.HasSelection()
 }
 
+// hasCommentableTab reports whether the active tab is editable text with a
+// known single-line comment marker.
+func (a *App) hasCommentableTab() bool {
+	t := a.activeTabPtr()
+	if t == nil || t.IsImage() {
+		return false
+	}
+	_, ok := editor.LineCommentPrefix(t.Path)
+	return ok
+}
+
 // hasClipboard reports whether the editor's internal clipboard has content
 // to paste.
 func (a *App) hasClipboard() bool { return a.clipBuf != "" }
@@ -1889,6 +1901,25 @@ func (a *App) menuCut() {
 func (a *App) menuPaste() {
 	a.closeMenu()
 	a.pasteClipboard()
+}
+
+// menuToggleLineComment comments or uncomments the active line selection.
+func (a *App) menuToggleLineComment() {
+	a.closeMenu()
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsImage() {
+		return
+	}
+	changed, ok := tab.ToggleLineComment()
+	if !ok {
+		a.flash("No line comment syntax for this file")
+		return
+	}
+	if !changed {
+		a.flash("No non-blank lines to comment")
+		return
+	}
+	a.flash("Toggled line comment")
 }
 
 // menuRefreshTree forces an immediate sidebar reload. Currently unwired
