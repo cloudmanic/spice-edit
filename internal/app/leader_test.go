@@ -99,6 +99,25 @@ func TestHandleKey_LeaderToggleSidebar(t *testing.T) {
 	}
 }
 
+// TestHandleKey_LeaderToggleLineComment binds Esc-/ to the same action menu
+// path, giving keyboard users a fast toggle without adding Ctrl shortcuts.
+func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(target, []byte("one\ntwo"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, '/'))
+
+	if got := a.activeTabPtr().Buffer.String(); got != "// one\ntwo" {
+		t.Fatalf("Esc-/ should comment the cursor line, got %q", got)
+	}
+}
+
 // TestHandleKey_LeaderQuit sets a.quit via Esc-q. We test this directly
 // rather than through Run() so we don't have to drive the event loop —
 // the quit flag is what Run() polls each tick.

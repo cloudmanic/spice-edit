@@ -7,18 +7,18 @@
 
 // leader.go defines the editor's Esc-leader hotkey table. Esc-Esc still opens
 // the action menu (handled in handleKey); the bindings here handle the
-// "Esc, then a single letter within doubleEscMs" sequences for common
+// "Esc, then one rune within doubleEscMs" sequences for common
 // actions. We deliberately avoid Ctrl-key shortcuts because they fight
 // tmux/zellij prefixes and the terminal's own bindings — Esc is the only
 // modifier we trust over SSH.
 
 package app
 
-// leaderBinding is one Esc-leader entry: the trigger rune (lowercase ASCII)
-// and the App method that fires when the user presses Esc, <rune> in quick
-// succession. Each method already handles its own preconditions — calling
-// menuUndo with no active tab, for example, is a safe no-op — so the leader
-// dispatch doesn't need to re-check enable predicates.
+// leaderBinding is one Esc-leader entry: the trigger rune and the App method
+// that fires when the user presses Esc, <rune> in quick succession. Each method
+// already handles its own preconditions — calling menuUndo with no active tab,
+// for example, is a safe no-op — so the leader dispatch doesn't need to
+// re-check enable predicates.
 type leaderBinding struct {
 	key    rune
 	action func(*App)
@@ -26,9 +26,9 @@ type leaderBinding struct {
 
 // leaderBindings is the editor's full Esc-leader table. The order is purely
 // presentational: tests iterate it to assert every binding fires, and a
-// future help screen can render the table directly. Letters are chosen to
-// be mnemonic and avoid collisions — capital letters are reserved in case
-// we ever want a "shift-flavored" variant for destructive twins.
+// future help screen can render the table directly. Letter bindings are
+// chosen to be mnemonic and avoid collisions; punctuation bindings mirror
+// familiar editor gestures where they make sense.
 //
 // Intentionally not bound:
 //   - c / x / v (clipboard) — the host terminal's Cmd+C/V already covers
@@ -44,6 +44,7 @@ func leaderBindings() []leaderBinding {
 		{'q', (*App).menuQuit},
 		{'n', (*App).menuNewFile},
 		{'t', (*App).menuToggleSidebar},
+		{'/', (*App).menuToggleLineComment},
 		{'f', (*App).openFind},
 		{'p', (*App).openFinder},
 	}

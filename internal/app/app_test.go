@@ -231,10 +231,10 @@ func TestResizeSidebar_TinyWindow(t *testing.T) {
 // TestDetectLangLabel covers the language label helper's three cases.
 func TestDetectLangLabel(t *testing.T) {
 	cases := map[string]string{
-		"":              "text",
-		"foo.go":        "go",
-		"foo":           "text",
-		"path/to/x.py":  "py",
+		"":               "text",
+		"foo.go":         "go",
+		"foo":            "text",
+		"path/to/x.py":   "py",
 		"archive.tar.gz": "gz",
 	}
 	for in, want := range cases {
@@ -396,8 +396,8 @@ func TestCloseTab_OutOfRange(t *testing.T) {
 	a.requestCloseTab(99)
 }
 
-// TestHasTab_Predicates covers the four "is X available?" checks used to
-// dim menu rows.
+// TestHasTab_Predicates covers the "is X available?" checks used to dim menu
+// rows.
 func TestHasTab_Predicates(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
@@ -405,8 +405,8 @@ func TestHasTab_Predicates(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
-	if a.hasTab() || a.hasSavableTab() || a.hasSelection() || a.hasClipboard() {
-		t.Fatal("fresh app should have no tab/selection/clipboard")
+	if a.hasTab() || a.hasSavableTab() || a.hasSelection() || a.hasClipboard() || a.hasCommentableTab() {
+		t.Fatal("fresh app should have no tab/selection/clipboard/comment action")
 	}
 
 	a.openFile(target)
@@ -415,6 +415,9 @@ func TestHasTab_Predicates(t *testing.T) {
 	}
 	if a.hasSelection() {
 		t.Fatal("no selection on a fresh tab")
+	}
+	if a.hasCommentableTab() {
+		t.Fatal(".txt should not expose the line-comment action")
 	}
 
 	// Make a synthetic selection.
@@ -428,6 +431,31 @@ func TestHasTab_Predicates(t *testing.T) {
 	a.clipBuf = "x"
 	if !a.hasClipboard() {
 		t.Fatal("expected hasClipboard once clipBuf set")
+	}
+}
+
+// TestHasCommentableTab_Predicate checks that line-comment actions only enable
+// on editable text tabs with known comment syntax.
+func TestHasCommentableTab_Predicate(t *testing.T) {
+	dir := t.TempDir()
+	goFile := filepath.Join(dir, "main.go")
+	htmlFile := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(goFile, []byte("package main"), 0644); err != nil {
+		t.Fatalf("seed go: %v", err)
+	}
+	if err := os.WriteFile(htmlFile, []byte("<main></main>"), 0644); err != nil {
+		t.Fatalf("seed html: %v", err)
+	}
+	a := newTestApp(t, dir)
+
+	a.openFile(goFile)
+	if !a.hasCommentableTab() {
+		t.Fatal(".go tab should expose the line-comment action")
+	}
+
+	a.openFile(htmlFile)
+	if a.hasCommentableTab() {
+		t.Fatal(".html tab should not expose the line-comment action")
 	}
 }
 
@@ -620,6 +648,48 @@ func TestMenuToggleSidebar(t *testing.T) {
 	a.menuToggleSidebar()
 	if !a.sidebarShown {
 		t.Fatal("expected shown after second toggle")
+	}
+}
+
+// TestMenuToggleLineComment runs the menu action against the active tab so the
+// app layer and editor-layer primitive stay wired together.
+func TestMenuToggleLineComment(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(target, []byte("one\ntwo"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	a.menuToggleLineComment()
+
+	if got := a.activeTabPtr().Buffer.String(); got != "// one\ntwo" {
+		t.Fatalf("buffer = %q, want current line commented", got)
+	}
+	if a.statusMsg != "Toggled line comment" {
+		t.Fatalf("statusMsg = %q", a.statusMsg)
+	}
+}
+
+// TestMenuToggleLineComment_Unsupported flashes a clear no-op instead of
+// guessing at block-comment-only formats.
+func TestMenuToggleLineComment_Unsupported(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(target, []byte("<main></main>"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	a.menuToggleLineComment()
+
+	if got := a.activeTabPtr().Buffer.String(); got != "<main></main>" {
+		t.Fatalf("unsupported buffer changed to %q", got)
+	}
+	if a.statusMsg != "No line comment syntax for this file" {
+		t.Fatalf("statusMsg = %q", a.statusMsg)
 	}
 }
 
@@ -999,9 +1069,9 @@ func TestScrollAt(t *testing.T) {
 	}
 	a := newTestApp(t, dir)
 	a.openFile(target)
-	a.scrollAt(1, 5, 1)            // sidebar
-	a.scrollAt(60, 5, 1)           // editor
-	a.scrollAt(60, a.height-1, 1)  // status bar (no-op-ish)
+	a.scrollAt(1, 5, 1)           // sidebar
+	a.scrollAt(60, 5, 1)          // editor
+	a.scrollAt(60, a.height-1, 1) // status bar (no-op-ish)
 }
 
 // TestSidebarClick_File opens a file when a file row is clicked.
@@ -1281,9 +1351,20 @@ func TestHandleMenuMouse_ClicksRowAndOutside(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.openMenu()
 	mx, my, _, _ := a.menuModalRect()
-	// Click on the toggle row (relY=26) — flips the sidebar.
+	// Click on the sidebar toggle row — flips the sidebar.
+	items, _, _ := a.menuLayout()
+	toggleRelY := -1
+	for _, item := range items {
+		if item.labelFor != nil && item.labelFor(a) == "Hide file explorer" {
+			toggleRelY = item.relY
+			break
+		}
+	}
+	if toggleRelY < 0 {
+		t.Fatal("sidebar toggle row not found")
+	}
 	before := a.sidebarShown
-	a.handleMenuMouse(mx+5, my+26, tcell.Button1)
+	a.handleMenuMouse(mx+5, my+toggleRelY, tcell.Button1)
 	if a.sidebarShown == before {
 		t.Fatal("expected toggle to fire")
 	}
@@ -1408,7 +1489,7 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 }
 
 // TestMenuLayout_NoCustomActions pins down the baseline geometry: with
-// zero custom actions the modal still has six built-in groups and the
+// zero custom actions the modal still has seven built-in groups and the
 // height matches the expected layout total. Catches accidental
 // off-by-one regressions when someone tweaks the layout helper.
 func TestMenuLayout_NoCustomActions(t *testing.T) {
@@ -1416,13 +1497,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 30 {
-		t.Errorf("modalHeight = %d, want 30", h)
+	if h != 31 {
+		t.Errorf("modalHeight = %d, want 31", h)
 	}
-	if got := len(items); got != 20 {
-		t.Errorf("item count = %d, want 20 built-ins", got)
+	if got := len(items); got != 21 {
+		t.Errorf("item count = %d, want 21 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 21, 25, 27}
+	wantDiv := []int{2, 6, 10, 13, 21, 26, 28}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1431,6 +1512,42 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 			t.Errorf("dividers[%d] = %d, want %d", i, dividers[i], d)
 		}
 	}
+}
+
+// TestMenuLayout_ToggleLineCommentRow ensures the comment action is present
+// and uses the same enablement predicate as the direct app method.
+func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(target, []byte("package main"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+
+	item := menuItemByLabel(t, a, "Toggle line comment")
+	if item.enabled(a) {
+		t.Fatal("comment row should be disabled without an active tab")
+	}
+
+	a.openFile(target)
+	item = menuItemByLabel(t, a, "Toggle line comment")
+	if !item.enabled(a) {
+		t.Fatal("comment row should be enabled for a .go tab")
+	}
+}
+
+// menuItemByLabel finds a menu row by static label for tests that care about
+// one action without hard-coding its row index.
+func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
+	t.Helper()
+	items, _, _ := a.menuLayout()
+	for _, item := range items {
+		if item.label == label {
+			return item
+		}
+	}
+	t.Fatalf("menu item %q not found", label)
+	return menuItemDef{}
 }
 
 // TestMenuLayout_WithCustomActions checks the splice-before-Quit
@@ -1445,8 +1562,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 33 { // 30 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 33", h)
+	if h != 34 { // 31 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 34", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.
