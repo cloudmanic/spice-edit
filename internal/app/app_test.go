@@ -2067,6 +2067,79 @@ func TestDrawTabBar_RendersIconWhenEnabled(t *testing.T) {
 	}
 }
 
+// TestHasTree_TrueAndFalse pins the visibility predicate that drives
+// the single-file-mode menu filter: any app with a non-nil tree
+// reports true; setting tree to nil flips it false.
+func TestHasTree_TrueAndFalse(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	if !a.hasTree() {
+		t.Fatal("expected hasTree=true on a normal-mode app")
+	}
+	a.tree = nil
+	if a.hasTree() {
+		t.Fatal("expected hasTree=false when tree is nil")
+	}
+}
+
+// TestMenuLayout_HidesSidebarToggleInSingleFileMode is the contract
+// test for the single-file-mode feature: with no file tree, the
+// 'Show / Hide file explorer' row must not appear in the action
+// menu — it's nonsensical there because the sidebar isn't built.
+// With a tree present (normal mode), the row appears.
+func TestMenuLayout_HidesSidebarToggleInSingleFileMode(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+
+	// Sanity: the toggle row IS present in normal mode.
+	items, _, _ := a.menuLayout()
+	if !containsSidebarToggle(items, a) {
+		t.Fatal("expected sidebar-toggle row in normal mode")
+	}
+
+	// Simulate single-file mode by clearing the tree.
+	a.tree = nil
+	items, _, _ = a.menuLayout()
+	if containsSidebarToggle(items, a) {
+		t.Fatal("expected sidebar-toggle row to be absent when tree is nil")
+	}
+}
+
+// TestMenuLayout_NoEmptyDividerAfterFiltering guards against the
+// regression where filtering the sole item of a group out would
+// leave a dangling divider row, doubling the gap in the menu.
+func TestMenuLayout_NoEmptyDividerAfterFiltering(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree = nil // collapses the View-toggle group to empty
+
+	_, dividers, height := a.menuLayout()
+	// Dividers must all sit strictly below the title divider (row 2)
+	// and strictly above the modal's bottom border (height-1). Two
+	// adjacent dividers (gap == 1) would mean we kept a divider for
+	// a now-empty group.
+	for i := 1; i < len(dividers); i++ {
+		if dividers[i]-dividers[i-1] < 2 {
+			t.Fatalf("dividers too close: %v (height=%d)", dividers, height)
+		}
+	}
+}
+
+// containsSidebarToggle is the menu-test helper that locates the
+// dynamic-label row whose label flips between "Show file explorer"
+// and "Hide file explorer". We match on labelFor's resolved string
+// because the sidebar-toggle row is the only one that uses those
+// exact labels.
+func containsSidebarToggle(items []menuItemDef, a *App) bool {
+	for _, it := range items {
+		if it.labelFor == nil {
+			continue
+		}
+		l := it.labelFor(a)
+		if l == "Show file explorer" || l == "Hide file explorer" {
+			return true
+		}
+	}
+	return false
+}
+
 // TestDrawTabBar_NoIconWhenDisabled is the inverse of the above —
 // flipping IconsEnabled off must remove the glyph from the tab bar
 // (so terminals without a Nerd Font don't see tofu boxes in tabs).
