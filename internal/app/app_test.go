@@ -1367,9 +1367,12 @@ func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
 		t.Fatalf("Shift+WheelUp should reduce ScrollX, got %d (was %d)", tab.ScrollX, startX)
 	}
 
-	// Unmodified WheelDown still scrolls vertically.
+	// Unmodified WheelDown still scrolls vertically. Reset the sticky
+	// shift state first — within modifierStickyWindow of the previous
+	// shift events it'd still register as a shifted wheel.
 	tab.ScrollX = 0
 	tab.ScrollY = 0
+	a.lastShiftAt = time.Time{}
 	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone)
 	a.handleMouse(ev)
 	if tab.ScrollY == 0 {
@@ -1377,6 +1380,38 @@ func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
 	}
 	if tab.ScrollX != 0 {
 		t.Fatalf("WheelDown without shift should NOT touch ScrollX, got %d", tab.ScrollX)
+	}
+}
+
+// TestHandleMouse_ShiftStickyForWheel covers the Zellij quirk where
+// Shift arrives in a ButtonNone+Shift event right before an unmodified
+// WheelDown. We feed that exact sequence and confirm the wheel event is
+// treated as horizontal because the sticky-shift window picked it up.
+func TestHandleMouse_ShiftStickyForWheel(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	editorX := a.sidebarW() + 10
+
+	// First event: ButtonNone with Shift modifier — what Zellij emits
+	// when the user holds shift but hasn't moved or wheeled yet.
+	ev := tcell.NewEventMouse(editorX, 5, tcell.ButtonNone, tcell.ModShift)
+	a.handleMouse(ev)
+	// Second event: WheelDown with NO modifier — what arrives milliseconds
+	// later. Without the sticky window this would scroll vertically.
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone)
+	a.handleMouse(ev)
+
+	if tab.ScrollX == 0 {
+		t.Fatalf("expected sticky-shift to route WheelDown to horizontal, ScrollX still 0")
+	}
+	if tab.ScrollY != 0 {
+		t.Fatalf("sticky-shift WheelDown shouldn't touch ScrollY, got %d", tab.ScrollY)
 	}
 }
 
