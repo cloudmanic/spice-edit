@@ -1298,6 +1298,37 @@ func TestHandleMouse_Wheel(t *testing.T) {
 	a.handleMouse(ev)
 }
 
+// TestHandleMouse_WheelHorizontal confirms WheelLeft / WheelRight events
+// shift the active tab's ScrollX. The test opens a tab with a long line,
+// fires WheelRight to scroll horizontally, then WheelLeft to walk it
+// back to zero.
+func TestHandleMouse_WheelHorizontal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("no active tab after openFile")
+	}
+	// Aim well inside the editor pane (past the sidebar, below the tab bar).
+	editorX := a.sidebarW() + 10
+	ev := tcell.NewEventMouse(editorX, 5, tcell.WheelRight, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollX == 0 {
+		t.Fatalf("WheelRight should advance ScrollX, still 0")
+	}
+	startX := tab.ScrollX
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelLeft, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollX >= startX {
+		t.Fatalf("WheelLeft should reduce ScrollX, got %d (was %d)", tab.ScrollX, startX)
+	}
+}
+
 // TestHandleMouse_RightClickOpensMenu falls back to the main menu when the
 // right-click isn't on a tree row.
 func TestHandleMouse_RightClickOpensMenu(t *testing.T) {

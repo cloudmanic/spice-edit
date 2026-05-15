@@ -908,3 +908,91 @@ func TestTab_clampScroll_BoundsScroll(t *testing.T) {
 		t.Fatalf("ScrollY not clamped: %d", tab.ScrollY)
 	}
 }
+
+// TestTab_ScrollH_AdjustsAndClamps confirms that ScrollH adds the delta
+// and never lets ScrollX go negative — mirroring how Scroll behaves for
+// the vertical axis.
+func TestTab_ScrollH_AdjustsAndClamps(t *testing.T) {
+	tab := &Tab{Buffer: NewBuffer("hello world")}
+	tab.ScrollH(5)
+	if tab.ScrollX != 5 {
+		t.Fatalf("ScrollX = %d, want 5", tab.ScrollX)
+	}
+	tab.ScrollH(-100)
+	if tab.ScrollX != 0 {
+		t.Fatalf("ScrollX after negative delta = %d, want 0", tab.ScrollX)
+	}
+}
+
+// TestTab_Render_OverflowIndicator_Right paints a long line into a narrow
+// viewport and confirms a '›' glyph appears at the rightmost content cell,
+// signaling that more content exists off-screen. Without this affordance
+// the user has no way to discover horizontal scroll is available.
+func TestTab_Render_OverflowIndicator_Right(t *testing.T) {
+	scr := newSimScreen(t, 20, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	// 30 chars on one line; viewport content width = 20 - gutterWidth - 1 = 13.
+	tab.Buffer = NewBuffer(strings.Repeat("x", 30))
+	tab.Cursor = Position{Line: 0, Col: 0}
+	tab.Anchor = tab.Cursor
+
+	tab.Render(scr, theme.Default(), 0, 0, 20, 5)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	// Last cell of row 0 should be the right-overflow glyph.
+	last := cells[w-1]
+	if len(last.Runes) == 0 || last.Runes[0] != '›' {
+		t.Fatalf("expected '›' at row 0 col %d, got %q", w-1, string(last.Runes))
+	}
+}
+
+// TestTab_Render_OverflowIndicator_Left scrolls a long line right and
+// confirms a '‹' glyph appears at the leftmost content cell to signal
+// off-screen content to the left.
+func TestTab_Render_OverflowIndicator_Left(t *testing.T) {
+	scr := newSimScreen(t, 20, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer(strings.Repeat("x", 30))
+	tab.ScrollX = 10
+	tab.Cursor = Position{Line: 0, Col: 10}
+	tab.Anchor = tab.Cursor
+
+	tab.Render(scr, theme.Default(), 0, 0, 20, 5)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	// First content cell is at column gutterWidth + 1.
+	left := cells[gutterWidth+1]
+	if len(left.Runes) == 0 || left.Runes[0] != '‹' {
+		t.Fatalf("expected '‹' at row 0 col %d, got %q", gutterWidth+1, string(left.Runes))
+	}
+	_ = w
+}
+
+// TestTab_Render_NoOverflowIndicator_WhenLineFits is the negative control:
+// a line that fits within contentW should NOT get a '›' glyph painted over
+// its trailing real content.
+func TestTab_Render_NoOverflowIndicator_WhenLineFits(t *testing.T) {
+	scr := newSimScreen(t, 40, 5)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("short")
+	tab.Cursor = Position{Line: 0, Col: 0}
+	tab.Anchor = tab.Cursor
+
+	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	for i := 0; i < w; i++ {
+		if len(cells[i].Runes) > 0 && (cells[i].Runes[0] == '›' || cells[i].Runes[0] == '‹') {
+			t.Fatalf("unexpected overflow glyph at col %d", i)
+		}
+	}
+}

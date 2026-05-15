@@ -50,6 +50,7 @@ const (
 	doubleClickMs       = 500 * time.Millisecond
 	doubleEscMs         = 500 * time.Millisecond
 	wheelLines          = 3
+	wheelCols           = 6 // horizontal step per WheelLeft/WheelRight event
 
 	// treeRefreshInterval is how often the background goroutine kicks off
 	// a file-tree reload so the sidebar stays in sync with on-disk changes
@@ -1049,6 +1050,17 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		a.scrollAt(x, y, wheelLines)
 		return
 	}
+	// Horizontal wheel — trackpad horizontal swipes or shift+wheel in
+	// terminals that map them. Lets the user reveal off-screen content
+	// on long lines without moving the cursor.
+	if btn&tcell.WheelLeft != 0 {
+		a.scrollAtH(x, y, -wheelCols)
+		return
+	}
+	if btn&tcell.WheelRight != 0 {
+		a.scrollAtH(x, y, wheelCols)
+		return
+	}
 
 	leftDown := btn&tcell.Button1 != 0
 
@@ -1124,6 +1136,21 @@ func (a *App) scrollAt(x, y, delta int) {
 	if y > 0 && y < a.height-1 {
 		if t := a.activeTabPtr(); t != nil {
 			t.Scroll(delta)
+		}
+	}
+}
+
+// scrollAtH scrolls the panel under (x, y) horizontally by delta cells.
+// The file tree has no useful horizontal axis (each row is a single label),
+// so we only honor horizontal wheel events when they fall inside the
+// editor pane.
+func (a *App) scrollAtH(x, y, delta int) {
+	if sw := a.sidebarW(); sw > 0 && x < sw {
+		return
+	}
+	if y > 0 && y < a.height-1 {
+		if t := a.activeTabPtr(); t != nil {
+			t.ScrollH(delta)
 		}
 	}
 }
