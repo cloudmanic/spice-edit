@@ -50,6 +50,17 @@ const (
 	doubleClickMs       = 500 * time.Millisecond
 	doubleEscMs         = 500 * time.Millisecond
 	wheelLines          = 3
+	wheelCols           = 6 // horizontal step per WheelLeft/WheelRight event
+
+	// modifierStickyWindow is how long a previously-seen Shift modifier
+	// state is allowed to persist forward onto the next wheel event.
+	// Some terminals (Zellij + macOS Terminal among them) emit the
+	// Shift state as a separate ButtonNone+Shift event right before
+	// firing the WheelUp/WheelDown without the modifier — so without
+	// this carry-forward, shift+wheel reads as plain wheel. 250ms is
+	// long enough to bridge the gap and short enough that releasing
+	// Shift before scrolling reliably reverts to vertical scroll.
+	modifierStickyWindow = 250 * time.Millisecond
 
 	// treeRefreshInterval is how often the background goroutine kicks off
 	// a file-tree reload so the sidebar stays in sync with on-disk changes
@@ -299,6 +310,15 @@ type App struct {
 	dragMode     string // "editor" while a drag-select is active.
 	lastClick    clickRecord
 	lastTabRects []tabRect
+
+	// lastShiftAt is the wall-clock time we last saw any mouse event
+	// carrying the Shift modifier. Some terminals (notably Zellij over
+	// macOS Terminal) report modifier state in a separate ButtonNone
+	// event right before the wheel event, instead of folding the
+	// modifier into the wheel event itself. We treat a wheel event as
+	// shifted when one of those modifier-state events arrived within
+	// modifierStickyWindow. See handleMouse.
+	lastShiftAt time.Time
 
 	menuOpen       bool
 	hoveredMenuRow int       // index into menuItems of the row under the mouse, or -1.
@@ -994,6 +1014,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	x, y := ev.Position()
 	btn := ev.Buttons()
 
+	// Remember when we last saw Shift held down on ANY mouse event.
+	// Zellij + macOS Terminal split shift+wheel into two events: a
+	// ButtonNone+Shift "modifier state" event, then a WheelDown/Up
+	// with no modifier. We bridge them via modifierStickyWindow below.
+	if ev.Modifiers()&tcell.ModShift != 0 {
+		a.lastShiftAt = time.Now()
+	}
+
 	// Secondary modals absorb all mouse input. The order here matches
 	// keyboard routing so behavior stays predictable.
 	if a.promptOpen {
@@ -1041,12 +1069,39 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 
 	// Wheel events take priority — they fire even with no button held.
+	// Shift+wheel rotates the vertical wheel into horizontal scrolling
+	// (the VS Code convention). Most terminals never emit native
+	// WheelLeft/WheelRight, so this is the path that actually fires in
+	// practice; the dedicated horizontal-wheel branch below is a bonus
+	// for terminals that do.
+	//
+	// We accept "shift was just seen" within modifierStickyWindow as
+	// equivalent to shift-on-this-event, because Zellij and friends
+	// strip the modifier from the actual wheel event.
+	shift := ev.Modifiers()&tcell.ModShift != 0 ||
+		(!a.lastShiftAt.IsZero() && time.Since(a.lastShiftAt) < modifierStickyWindow)
 	if btn&tcell.WheelUp != 0 {
-		a.scrollAt(x, y, -wheelLines)
+		if shift {
+			a.scrollAtH(x, y, -wheelCols)
+		} else {
+			a.scrollAt(x, y, -wheelLines)
+		}
 		return
 	}
 	if btn&tcell.WheelDown != 0 {
-		a.scrollAt(x, y, wheelLines)
+		if shift {
+			a.scrollAtH(x, y, wheelCols)
+		} else {
+			a.scrollAt(x, y, wheelLines)
+		}
+		return
+	}
+	if btn&tcell.WheelLeft != 0 {
+		a.scrollAtH(x, y, -wheelCols)
+		return
+	}
+	if btn&tcell.WheelRight != 0 {
+		a.scrollAtH(x, y, wheelCols)
 		return
 	}
 
@@ -1124,6 +1179,21 @@ func (a *App) scrollAt(x, y, delta int) {
 	if y > 0 && y < a.height-1 {
 		if t := a.activeTabPtr(); t != nil {
 			t.Scroll(delta)
+		}
+	}
+}
+
+// scrollAtH scrolls the panel under (x, y) horizontally by delta cells.
+// The file tree has no useful horizontal axis (each row is a single label),
+// so we only honor horizontal wheel events when they fall inside the
+// editor pane.
+func (a *App) scrollAtH(x, y, delta int) {
+	if sw := a.sidebarW(); sw > 0 && x < sw {
+		return
+	}
+	if y > 0 && y < a.height-1 {
+		if t := a.activeTabPtr(); t != nil {
+			t.ScrollH(delta)
 		}
 	}
 }

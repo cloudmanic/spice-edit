@@ -1298,6 +1298,123 @@ func TestHandleMouse_Wheel(t *testing.T) {
 	a.handleMouse(ev)
 }
 
+// TestHandleMouse_WheelHorizontal confirms WheelLeft / WheelRight events
+// shift the active tab's ScrollX. The test opens a tab with a long line,
+// fires WheelRight to scroll horizontally, then WheelLeft to walk it
+// back to zero.
+func TestHandleMouse_WheelHorizontal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("no active tab after openFile")
+	}
+	// Aim well inside the editor pane (past the sidebar, below the tab bar).
+	editorX := a.sidebarW() + 10
+	ev := tcell.NewEventMouse(editorX, 5, tcell.WheelRight, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollX == 0 {
+		t.Fatalf("WheelRight should advance ScrollX, still 0")
+	}
+	startX := tab.ScrollX
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelLeft, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollX >= startX {
+		t.Fatalf("WheelLeft should reduce ScrollX, got %d (was %d)", tab.ScrollX, startX)
+	}
+}
+
+// TestHandleMouse_ShiftWheelScrollsHorizontally confirms that holding
+// shift while turning the vertical wheel scrolls the X axis instead —
+// this is the path that actually works in most terminals (which never
+// emit native WheelLeft/WheelRight). Without shift, the same wheel
+// event must scroll vertically; we check both to make sure the modifier
+// is what gates the rotation.
+func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("no active tab after openFile")
+	}
+	editorX := a.sidebarW() + 10
+
+	// Shift+WheelDown → horizontal scroll right.
+	ev := tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModShift)
+	a.handleMouse(ev)
+	if tab.ScrollX == 0 {
+		t.Fatalf("Shift+WheelDown should scroll horizontally, ScrollX still 0")
+	}
+	if tab.ScrollY != 0 {
+		t.Fatalf("Shift+WheelDown should NOT touch ScrollY, got %d", tab.ScrollY)
+	}
+
+	// Shift+WheelUp → horizontal scroll left.
+	startX := tab.ScrollX
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelUp, tcell.ModShift)
+	a.handleMouse(ev)
+	if tab.ScrollX >= startX {
+		t.Fatalf("Shift+WheelUp should reduce ScrollX, got %d (was %d)", tab.ScrollX, startX)
+	}
+
+	// Unmodified WheelDown still scrolls vertically. Reset the sticky
+	// shift state first — within modifierStickyWindow of the previous
+	// shift events it'd still register as a shifted wheel.
+	tab.ScrollX = 0
+	tab.ScrollY = 0
+	a.lastShiftAt = time.Time{}
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollY == 0 {
+		t.Fatalf("WheelDown without shift should scroll vertically, ScrollY still 0")
+	}
+	if tab.ScrollX != 0 {
+		t.Fatalf("WheelDown without shift should NOT touch ScrollX, got %d", tab.ScrollX)
+	}
+}
+
+// TestHandleMouse_ShiftStickyForWheel covers the Zellij quirk where
+// Shift arrives in a ButtonNone+Shift event right before an unmodified
+// WheelDown. We feed that exact sequence and confirm the wheel event is
+// treated as horizontal because the sticky-shift window picked it up.
+func TestHandleMouse_ShiftStickyForWheel(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	editorX := a.sidebarW() + 10
+
+	// First event: ButtonNone with Shift modifier — what Zellij emits
+	// when the user holds shift but hasn't moved or wheeled yet.
+	ev := tcell.NewEventMouse(editorX, 5, tcell.ButtonNone, tcell.ModShift)
+	a.handleMouse(ev)
+	// Second event: WheelDown with NO modifier — what arrives milliseconds
+	// later. Without the sticky window this would scroll vertically.
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone)
+	a.handleMouse(ev)
+
+	if tab.ScrollX == 0 {
+		t.Fatalf("expected sticky-shift to route WheelDown to horizontal, ScrollX still 0")
+	}
+	if tab.ScrollY != 0 {
+		t.Fatalf("sticky-shift WheelDown shouldn't touch ScrollY, got %d", tab.ScrollY)
+	}
+}
+
 // TestHandleMouse_RightClickOpensMenu falls back to the main menu when the
 // right-click isn't on a tree row.
 func TestHandleMouse_RightClickOpensMenu(t *testing.T) {

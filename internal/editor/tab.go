@@ -627,6 +627,21 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			}
 			visualCol += width
 		}
+
+		// Overflow affordance: paint a muted '‹' / '›' over the leftmost /
+		// rightmost content cell when the line extends past the viewport
+		// in that direction. Without this hint a terminal user has no way
+		// to tell that more content exists off-screen — there's no
+		// scrollbar to clue them in. visualCol now equals the total
+		// visual width of the line; scrollVisual is the visual cell
+		// corresponding to ScrollX.
+		overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+		if t.ScrollX > 0 {
+			scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
+		}
+		if visualCol-scrollVisual > contentW {
+			scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
+		}
 	}
 
 	// Position the hardware cursor at its visual column (so a cursor
@@ -682,6 +697,19 @@ func (t *Tab) Scroll(deltaLines int) {
 	t.ScrollY += deltaLines
 	if t.ScrollY < 0 {
 		t.ScrollY = 0
+	}
+}
+
+// ScrollH moves the viewport horizontally by delta rune-columns (negative
+// = left). Clamped at zero; the right side is naturally bounded by
+// Render's contentW window — scrolling past the longest visible line just
+// shows blank space, which is fine. Lives next to Scroll so the app's
+// mouse-wheel dispatcher can treat horizontal and vertical wheels
+// symmetrically.
+func (t *Tab) ScrollH(deltaCols int) {
+	t.ScrollX += deltaCols
+	if t.ScrollX < 0 {
+		t.ScrollX = 0
 	}
 }
 
