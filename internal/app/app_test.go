@@ -1329,6 +1329,57 @@ func TestHandleMouse_WheelHorizontal(t *testing.T) {
 	}
 }
 
+// TestHandleMouse_ShiftWheelScrollsHorizontally confirms that holding
+// shift while turning the vertical wheel scrolls the X axis instead —
+// this is the path that actually works in most terminals (which never
+// emit native WheelLeft/WheelRight). Without shift, the same wheel
+// event must scroll vertically; we check both to make sure the modifier
+// is what gates the rotation.
+func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 200)+"\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("no active tab after openFile")
+	}
+	editorX := a.sidebarW() + 10
+
+	// Shift+WheelDown → horizontal scroll right.
+	ev := tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModShift)
+	a.handleMouse(ev)
+	if tab.ScrollX == 0 {
+		t.Fatalf("Shift+WheelDown should scroll horizontally, ScrollX still 0")
+	}
+	if tab.ScrollY != 0 {
+		t.Fatalf("Shift+WheelDown should NOT touch ScrollY, got %d", tab.ScrollY)
+	}
+
+	// Shift+WheelUp → horizontal scroll left.
+	startX := tab.ScrollX
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelUp, tcell.ModShift)
+	a.handleMouse(ev)
+	if tab.ScrollX >= startX {
+		t.Fatalf("Shift+WheelUp should reduce ScrollX, got %d (was %d)", tab.ScrollX, startX)
+	}
+
+	// Unmodified WheelDown still scrolls vertically.
+	tab.ScrollX = 0
+	tab.ScrollY = 0
+	ev = tcell.NewEventMouse(editorX, 5, tcell.WheelDown, tcell.ModNone)
+	a.handleMouse(ev)
+	if tab.ScrollY == 0 {
+		t.Fatalf("WheelDown without shift should scroll vertically, ScrollY still 0")
+	}
+	if tab.ScrollX != 0 {
+		t.Fatalf("WheelDown without shift should NOT touch ScrollX, got %d", tab.ScrollX)
+	}
+}
+
 // TestHandleMouse_RightClickOpensMenu falls back to the main menu when the
 // right-click isn't on a tree row.
 func TestHandleMouse_RightClickOpensMenu(t *testing.T) {

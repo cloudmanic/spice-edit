@@ -1042,17 +1042,28 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 
 	// Wheel events take priority — they fire even with no button held.
+	// Shift+wheel rotates the vertical wheel into horizontal scrolling
+	// (the VS Code convention). Most terminals never emit native
+	// WheelLeft/WheelRight, so this is the path that actually fires in
+	// practice; the dedicated horizontal-wheel branch below is a bonus
+	// for terminals that do.
+	shift := ev.Modifiers()&tcell.ModShift != 0
 	if btn&tcell.WheelUp != 0 {
-		a.scrollAt(x, y, -wheelLines)
+		if shift {
+			a.scrollAtH(x, y, -wheelCols)
+		} else {
+			a.scrollAt(x, y, -wheelLines)
+		}
 		return
 	}
 	if btn&tcell.WheelDown != 0 {
-		a.scrollAt(x, y, wheelLines)
+		if shift {
+			a.scrollAtH(x, y, wheelCols)
+		} else {
+			a.scrollAt(x, y, wheelLines)
+		}
 		return
 	}
-	// Horizontal wheel — trackpad horizontal swipes or shift+wheel in
-	// terminals that map them. Lets the user reveal off-screen content
-	// on long lines without moving the cursor.
 	if btn&tcell.WheelLeft != 0 {
 		a.scrollAtH(x, y, -wheelCols)
 		return
