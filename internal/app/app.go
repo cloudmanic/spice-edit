@@ -948,6 +948,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// editing keys are blocked, but Down/Up move the highlight and Enter
 	// activates the highlighted row.
 	if a.menuOpen {
+		if ev.Key() == tcell.KeyRune {
+			if action := leaderActionFor(ev.Rune()); action != nil {
+				a.lastEscape = time.Time{}
+				action(a)
+				return
+			}
+		}
 		switch ev.Key() {
 		case tcell.KeyDown:
 			a.menuMoveSelection(1)

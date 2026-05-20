@@ -1251,6 +1251,23 @@ func TestHandleKey_MenuNavKeys(t *testing.T) {
 	}
 }
 
+// TestHandleKey_MenuShortcutAfterNavigation keeps menu shortcut letters live
+// after arrow-key navigation has moved the highlighted row.
+func TestHandleKey_MenuShortcutAfterNavigation(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openMenu()
+
+	a.handleKey(keyEv(tcell.KeyDown, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'p'))
+
+	if a.menuOpen {
+		t.Fatal("Esc-p from the open menu should close the menu")
+	}
+	if !a.finderOpen {
+		t.Fatal("Esc-p from the open menu should open the project finder")
+	}
+}
+
 // TestHandleKey_RoutesToActiveTab dispatches typing to the active tab.
 func TestHandleKey_RoutesToActiveTab(t *testing.T) {
 	dir := t.TempDir()
