@@ -21,7 +21,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/filetree"
-	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
 // TestCloseAllModals_ClearsEverything proves the helper turns off every
@@ -59,27 +58,6 @@ func TestCloseAllModals_ClearsEverything(t *testing.T) {
 	}
 	if a.autoScrollDir != 0 {
 		t.Fatalf("autoScrollDir not reset: %d", a.autoScrollDir)
-	}
-}
-
-// TestConfirmInfoLineStyle_ColorsDiffLines keeps git previews readable.
-func TestConfirmInfoLineStyle_ColorsDiffLines(t *testing.T) {
-	th := theme.Default()
-	bg := th.LineHL
-	cases := []struct {
-		line string
-		want tcell.Color
-	}{
-		{line: "+new code", want: th.GitAdded},
-		{line: "-old code", want: th.GitDeleted},
-		{line: "@@ -1 +1 @@", want: th.AccentSoft},
-		{line: " context", want: th.Text},
-	}
-	for _, tc := range cases {
-		fg, _, _ := confirmInfoLineStyle(th, bg, tc.line).Decompose()
-		if fg != tc.want {
-			t.Fatalf("%q fg = %v, want %v", tc.line, fg, tc.want)
-		}
 	}
 }
 
@@ -552,7 +530,7 @@ func TestRuneLen(t *testing.T) {
 		"":      0,
 		"abc":   3,
 		"héllo": 5, // five runes, one cell each by this helper's contract
-		"日本":    2,
+		"日本":   2,
 	}
 	for s, want := range cases {
 		if got := runeLen(s); got != want {

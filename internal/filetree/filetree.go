@@ -35,18 +35,6 @@ type Node struct {
 	Children []*Node
 }
 
-// GitChangeKind describes the strongest git status a tree row should show.
-type GitChangeKind int
-
-const (
-	GitChangeNone GitChangeKind = iota
-	GitChangeModified
-	GitChangeAdded
-	GitChangeDeleted
-	GitChangeRenamed
-	GitChangeMixed
-)
-
 // Tree owns the root node and the most recently rendered flat list of
 // visible rows. Click hit-testing maps a screen row index back to the Node
 // drawn at that row.
@@ -61,7 +49,6 @@ type Tree struct {
 	// always visible. The app updates this whenever the user clicks a
 	// tree node or opens a file.
 	ActiveFolder string
-	ActiveFile   string
 
 	// DirtyFiles and DirtyFolders carry the project's git status — both
 	// indexed by absolute path. Files in DirtyFiles render in the theme's
@@ -69,8 +56,8 @@ type Tree struct {
 	// branch still signals there's a change inside. Both maps are nil
 	// when the project isn't a git repo or when git status hasn't been
 	// loaded yet, and the renderer treats nil as "everything clean".
-	DirtyFiles   map[string]GitChangeKind
-	DirtyFolders map[string]GitChangeKind
+	DirtyFiles   map[string]bool
+	DirtyFolders map[string]bool
 
 	// IconsEnabled toggles the Nerd Font glyph that prefixes each row.
 	// Set by App.loadSpiceConfig at startup based on the user's
@@ -237,9 +224,6 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if rootActive {
 		rootStyle = tcell.StyleDefault.Background(bg).Foreground(th.Accent).Bold(true)
 	}
-	if rootChange := t.DirtyFolders[t.Root.Path]; rootChange != GitChangeNone {
-		rootStyle = rootStyle.Foreground(gitChangeColor(th, rootChange))
-	}
 	drawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
 
 	// Build the flat list of visible rows from the root's children.
@@ -263,18 +247,21 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			continue
 		}
 		item := flat[idx]
-		active := item.Node.Path == t.ActiveFile || (item.Node.IsDir && item.Node.Path == t.ActiveFolder)
-		change := t.changeKind(item.Node)
-		drawNodeRow(scr, th, x, listTop+row, w, item, active, change, t.IconsEnabled)
+		active := item.Node.IsDir && item.Node.Path == t.ActiveFolder
+		dirty := t.isDirty(item.Node)
+		drawNodeRow(scr, th, x, listTop+row, w, item, active, dirty, t.IconsEnabled)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
 }
 
-// changeKind returns the git status color category for a tree node.
-func (t *Tree) changeKind(n *Node) GitChangeKind {
+// isDirty reports whether a node should render in the Modified color —
+// either because the file itself has uncommitted changes or because a
+// folder somewhere below it does. Returns false for any node when git
+// status hasn't been loaded.
+func (t *Tree) isDirty(n *Node) bool {
 	if n == nil {
-		return GitChangeNone
+		return false
 	}
 	if n.IsDir {
 		return t.DirtyFolders[n.Path]
@@ -283,9 +270,12 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 }
 
 // drawNodeRow renders one tree row with proper indent, chevron, and color.
-// active=true marks the active file or current working folder. change marks
-// uncommitted git status and overrides the normal foreground so changed names
-// stand out in the tree like other modern editors.
+// active=true marks this folder as the editor's current working folder
+// (the New File default), and is drawn bold + accent-tinted so the user
+// can see at a glance where the next "New file" will land. dirty=true
+// marks the node as having uncommitted git changes (or, for folders,
+// containing some) — it overrides the normal foreground with the
+// theme's Modified color so changed files stand out at a glance.
 // withIcons=true prefixes the name with a Nerd Font glyph + space; off
 // renders the legacy chevron-only look for terminals that can't show
 // the private-use glyphs.
@@ -296,7 +286,7 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 // styling. That's the visual cue you find in nvim-tree and friends:
 // a quick eye-scan picks out Go from Ruby from Markdown without
 // reading any text.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool) {
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active, dirty, withIcons bool) {
 	bg := th.SidebarBG
 	indent := strings.Repeat("  ", item.Depth)
 
@@ -324,8 +314,8 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	if active {
 		fg = th.Accent
 	}
-	if change != GitChangeNone {
-		fg = gitChangeColor(th, change)
+	if dirty {
+		fg = th.Modified
 	}
 	rowStyle := tcell.StyleDefault.Background(bg).Foreground(fg)
 	if active {
@@ -368,23 +358,6 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	drawString(scr, x+px, y, w-px, glyph, glyphStyle)
 	gx := len([]rune(glyph))
 	drawString(scr, x+px+gx, y, w-px-gx, "  "+suffix, rowStyle)
-}
-
-// gitChangeColor maps git status kinds to the tree row foreground.
-func gitChangeColor(th theme.Theme, change GitChangeKind) tcell.Color {
-	switch change {
-	case GitChangeAdded:
-		return th.GitAdded
-	case GitChangeDeleted:
-		return th.GitDeleted
-	case GitChangeRenamed:
-		return th.GitRenamed
-	case GitChangeMixed:
-		return th.GitMixed
-	case GitChangeModified:
-		return th.GitModified
-	}
-	return th.FileColor
 }
 
 // drawString writes s left-aligned within [x, x+w). Excess content is
@@ -461,125 +434,4 @@ func (t *Tree) Scroll(delta int) {
 	if t.ScrollY < 0 {
 		t.ScrollY = 0
 	}
-}
-
-// Reveal expands every directory from the tree root down to path's parent so
-// the file becomes visible in the sidebar, then scrolls the viewport so the
-// row lands on screen. Opening a file via the finder (Esc-p) or the command
-// line lands on a path whose ancestors are still collapsed — without this,
-// the active-file highlight is set but the row itself is invisible, leaving
-// the sidebar out of sync with the editor like a tab with no tab bar entry.
-//
-// When the target row is already inside the current viewport the scroll
-// position is left untouched, so clicking a visible row in the tree (which
-// also routes through openFile) doesn't snap it to the top.
-//
-// No-op when path isn't under the root, escapes it, or lives inside a hidden
-// directory the tree refuses to show (e.g. .git). viewH is the row count the
-// renderer will hand Render's list area; pass 0 to expand ancestors without
-// scrolling (used when the sidebar is hidden).
-func (t *Tree) Reveal(path string, viewH int) {
-	if t.Root == nil {
-		return
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return
-	}
-	rel, err := filepath.Rel(t.Root.Path, abs)
-	if err != nil {
-		return
-	}
-	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-
-	// Walk every directory component, lazily loading + expanding each so the
-	// next step can descend into it. The final component is the target row
-	// itself; it doesn't need expanding — revealing is about visibility, not
-	// auto-opening directories.
-	n := t.Root
-	for i := 0; i < len(parts)-1; i++ {
-		if !n.Loaded {
-			_ = loadChildren(n)
-		}
-		child := childByName(n, parts[i])
-		if child == nil {
-			return // hidden or gone — can't descend further
-		}
-		if !child.Expanded {
-			child.Expanded = true
-			if !child.Loaded {
-				_ = loadChildren(child)
-			}
-		}
-		n = child
-	}
-
-	// Find the target row among its parent's children so we can scroll to it.
-	if !n.Loaded {
-		_ = loadChildren(n)
-	}
-	target := childByName(n, parts[len(parts)-1])
-	if target == nil {
-		return
-	}
-
-	idx := t.flatIndexOf(target)
-	if idx < 0 {
-		return
-	}
-	if viewH <= 0 {
-		return
-	}
-	// Leave the viewport alone when the row is already on screen — a click on
-	// a visible row shouldn't snap it to the top.
-	if idx >= t.ScrollY && idx < t.ScrollY+viewH {
-		return
-	}
-	t.ScrollY = idx
-}
-
-// flatIndexOf returns the row index of target in the renderer's flat list
-// (the same pre-order walk Render builds via flattenInto), or -1 when target
-// isn't currently visible. Mirrors the render order exactly so the index we
-// scroll to is the row the user actually sees.
-func (t *Tree) flatIndexOf(target *Node) int {
-	idx := 0
-	var walk func(n *Node) bool
-	walk = func(n *Node) bool {
-		if n == target {
-			return true
-		}
-		idx++
-		if n.IsDir && n.Expanded {
-			for _, c := range n.Children {
-				if walk(c) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	for _, c := range t.Root.Children {
-		if walk(c) {
-			return idx
-		}
-	}
-	return -1
-}
-
-// childByName returns the direct child of n named name, or nil when no such
-// child exists. Reveal uses it to descend the path component by component.
-func childByName(n *Node, name string) *Node {
-	if n == nil {
-		return nil
-	}
-	for _, c := range n.Children {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }

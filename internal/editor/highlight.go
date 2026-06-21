@@ -26,37 +26,6 @@ import (
 // up the style for each cell it draws — at the cost of some memory.
 // For files small enough to comfortably review, that's a fine trade.
 func Highlight(filename, src string, t theme.Theme) [][]tcell.Style {
-	return highlightSource(filename, src, t)
-}
-
-// HighlightVisible returns a style grid for the current viewport. Only visible
-// rows are tokenised so keystroke cost follows terminal height, not file size.
-func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
-	styles := make([][]tcell.Style, len(lines))
-	if height <= 0 || startLine >= len(lines) {
-		return styles
-	}
-	if startLine < 0 {
-		startLine = 0
-	}
-	endLine := startLine + height
-	if endLine > len(lines) {
-		endLine = len(lines)
-	}
-	visible := strings.Join(lines[startLine:endLine], "\n")
-	visibleStyles := highlightSource(filename, visible, t)
-	for i, row := range visibleStyles {
-		lineIdx := startLine + i
-		if lineIdx >= endLine || lineIdx >= len(styles) {
-			break
-		}
-		styles[lineIdx] = row
-	}
-	return styles
-}
-
-// highlightSource tokenises src and returns one style row per source line.
-func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	lexer := lexers.Match(filename)
 	if lexer == nil {
 		lexer = lexers.Analyse(src)
@@ -72,7 +41,15 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	// Pre-allocate a styles grid sized to the source. We seed every cell
 	// with the base style so untokenised runes still render readably.
 	lines := strings.Split(src, "\n")
-	styles := baseStyleGrid(lines, base)
+	styles := make([][]tcell.Style, len(lines))
+	for i, ln := range lines {
+		runes := []rune(ln)
+		row := make([]tcell.Style, len(runes))
+		for j := range row {
+			row[j] = base
+		}
+		styles[i] = row
+	}
 
 	iter, err := lexer.Tokenise(nil, src)
 	if err != nil {
@@ -93,20 +70,6 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 			}
 			col++
 		}
-	}
-	return styles
-}
-
-// baseStyleGrid returns a correctly shaped grid pre-filled with base.
-func baseStyleGrid(lines []string, base tcell.Style) [][]tcell.Style {
-	styles := make([][]tcell.Style, len(lines))
-	for i, ln := range lines {
-		runes := []rune(ln)
-		row := make([]tcell.Style, len(runes))
-		for j := range row {
-			row[j] = base
-		}
-		styles[i] = row
 	}
 	return styles
 }

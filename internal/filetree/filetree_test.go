@@ -500,31 +500,6 @@ func TestRender_ActiveFolderIsBold(t *testing.T) {
 	}
 }
 
-// TestRender_ActiveFileIsBold verifies the open file itself is visible in the tree.
-func TestRender_ActiveFileIsBold(t *testing.T) {
-	root := mkTree(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	alpha := findChild(tr.Root, "alpha")
-	if err := alpha.reload(); err != nil {
-		t.Fatalf("reload alpha: %v", err)
-	}
-	alpha.Expanded = true
-	inner := findChild(alpha, "inner.go")
-	tr.ActiveFile = inner.Path
-
-	cells, w := renderAndCollect(t, tr, 40, 20)
-	rowY := findRowY(cells, w, 20, "inner.go")
-	if rowY < 0 {
-		t.Fatal("could not find active file row")
-	}
-	if !rowHasBold(cells, w, rowY) {
-		t.Fatal("active file row should be bold")
-	}
-}
-
 // TestRender_TinyHeightDoesNotPanic guards against an off-by-one when the
 // caller hands Render a height smaller than the 2-row header — listH goes
 // to zero and we shouldn't blow up dividing or indexing.
@@ -566,14 +541,14 @@ func TestRender_DirtyFileUsesModifiedColor(t *testing.T) {
 	if inner == nil {
 		t.Fatal("alpha/inner.go missing from fixture")
 	}
-	tr.DirtyFiles = map[string]GitChangeKind{inner.Path: GitChangeModified}
+	tr.DirtyFiles = map[string]bool{inner.Path: true}
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 	rowY := findRowY(cells, w, 20, "inner.go")
 	if rowY < 0 {
 		t.Fatal("could not find inner.go row in render output")
 	}
-	if !rowHasColor(cells, w, rowY, theme.Default().GitModified) {
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
 		t.Fatalf("expected inner.go row to be drawn in Modified color")
 	}
 }
@@ -589,31 +564,15 @@ func TestRender_DirtyFolderUsesModifiedColor(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	alpha := findChild(tr.Root, "alpha")
-	tr.DirtyFolders = map[string]GitChangeKind{alpha.Path: GitChangeModified}
+	tr.DirtyFolders = map[string]bool{alpha.Path: true}
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 	rowY := findRowY(cells, w, 20, "alpha")
 	if rowY < 0 {
 		t.Fatal("could not find alpha row in render output")
 	}
-	if !rowHasColor(cells, w, rowY, theme.Default().GitModified) {
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
 		t.Fatal("expected alpha folder row to be drawn in Modified color")
-	}
-}
-
-// TestRender_DirtyRootUsesModifiedColor ensures the project name itself
-// reflects git changes when any descendant is dirty.
-func TestRender_DirtyRootUsesModifiedColor(t *testing.T) {
-	root := mkTree(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	tr.DirtyFolders = map[string]GitChangeKind{tr.Root.Path: GitChangeModified}
-
-	cells, w := renderAndCollect(t, tr, 40, 20)
-	if !rowHasColor(cells, w, 1, theme.Default().GitModified) {
-		t.Fatal("expected root project row to be drawn in Modified color")
 	}
 }
 
@@ -629,14 +588,14 @@ func TestRender_DirtyAndActiveStaysBold(t *testing.T) {
 	}
 	alpha := findChild(tr.Root, "alpha")
 	tr.ActiveFolder = alpha.Path
-	tr.DirtyFolders = map[string]GitChangeKind{alpha.Path: GitChangeModified}
+	tr.DirtyFolders = map[string]bool{alpha.Path: true}
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 	rowY := findRowY(cells, w, 20, "alpha")
 	if rowY < 0 {
 		t.Fatal("could not find alpha row")
 	}
-	if !rowHasColor(cells, w, rowY, theme.Default().GitModified) {
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
 		t.Error("expected alpha row to be Modified colour")
 	}
 	if !rowHasBold(cells, w, rowY) {
@@ -832,14 +791,14 @@ func TestRender_DirtyOverridesDotMute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	tr.DirtyFiles = map[string]GitChangeKind{envPath: GitChangeModified}
+	tr.DirtyFiles = map[string]bool{envPath: true}
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 	rowY := findRowY(cells, w, 20, ".env")
 	if rowY < 0 {
 		t.Fatal("could not find .env row")
 	}
-	if !rowHasColor(cells, w, rowY, theme.Default().GitModified) {
+	if !rowHasColor(cells, w, rowY, theme.Default().Modified) {
 		t.Fatalf("dirty .env should override Muted with Modified, got %q",
 			rowText(cells, w, rowY))
 	}
@@ -925,266 +884,5 @@ func TestRender_IconsEnabledFolderOpenSwitches(t *testing.T) {
 	expanded := rowText(cells, w, rowY)
 	if !containsRune(expanded, icons.FolderOpen) {
 		t.Fatalf("expanded alpha row missing FolderOpen: %q", expanded)
-	}
-}
-
-// mkNested builds a deeper layout than mkTree so Reveal has a real ancestor
-// chain to walk. The shape:
-//
-//	root/
-//	  a/
-//	    b/
-//	      deep.go
-//	      other.go
-//	  top.go
-//	  zeta.txt
-//	  ...
-//
-// The top-level files give the flat list enough rows for the scroll tests
-// to have a target that genuinely sits below the viewport.
-func mkNested(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	mustMkdir(t, filepath.Join(root, "a"))
-	mustMkdir(t, filepath.Join(root, "a", "b"))
-	mustWrite(t, filepath.Join(root, "a", "b", "deep.go"), "x")
-	mustWrite(t, filepath.Join(root, "a", "b", "other.go"), "x")
-	mustWrite(t, filepath.Join(root, "top.go"), "x")
-	mustWrite(t, filepath.Join(root, "zeta.txt"), "x")
-	mustWrite(t, filepath.Join(root, "Apple.md"), "x")
-	return root
-}
-
-// TestReveal_ExpandsAncestorsAndScrolls is the headline case: a file buried
-// two directories deep is invisible until Reveal walks the chain, lazily
-// loads + expands each ancestor, and brings the row into the viewport.
-// Without this the finder would open the file and the sidebar would still
-// show a collapsed "a/" — the bug the feature exists to fix. With a large
-// viewport the row lands in view purely from the expansion, so the real
-// contract being pinned here is "ancestors expanded AND row on screen".
-func TestReveal_ExpandsAncestorsAndScrolls(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	deep := filepath.Join(root, "a", "b", "deep.go")
-	const viewH = 20
-
-	tr.Reveal(deep, viewH)
-
-	a := findChild(tr.Root, "a")
-	if a == nil {
-		t.Fatal("a missing")
-	}
-	if !a.Expanded || !a.Loaded {
-		t.Fatalf("a should be expanded+loaded after reveal: %+v", a)
-	}
-	b := findChild(a, "b")
-	if b == nil {
-		t.Fatal("b missing")
-	}
-	if !b.Expanded || !b.Loaded {
-		t.Fatalf("b should be expanded+loaded after reveal: %+v", b)
-	}
-	deepNode := findChild(b, "deep.go")
-	if deepNode == nil {
-		t.Fatal("deep.go missing after reveal")
-	}
-	wantIdx := tr.flatIndexOf(deepNode)
-	if wantIdx < 0 {
-		t.Fatal("deep.go should be in the flat list after ancestors expanded")
-	}
-	if wantIdx < tr.ScrollY || wantIdx >= tr.ScrollY+viewH {
-		t.Fatalf("deep.go (idx %d) should be inside viewport [ScrollY=%d, +%d)", wantIdx, tr.ScrollY, viewH)
-	}
-}
-
-// TestReveal_NoScrollWhenAlreadyVisible guards the click path: when the row
-// is already on screen Reveal must leave ScrollY alone, otherwise clicking a
-// visible row would snap it to the top — a surprising jump the user didn't
-// ask for.
-func TestReveal_NoScrollWhenAlreadyVisible(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Open a/b so deep.go is in the flat list, then park the viewport so
-	// deep.go is the second visible row.
-	a := findChild(tr.Root, "a")
-	tr.Toggle(a)
-	b := findChild(a, "b")
-	tr.Toggle(b)
-	deepNode := findChild(b, "deep.go")
-	idx := tr.flatIndexOf(deepNode)
-	tr.ScrollY = idx - 1 // deep.go one row into the viewport
-
-	deep := filepath.Join(root, "a", "b", "deep.go")
-	tr.Reveal(deep, 10)
-
-	if tr.ScrollY != idx-1 {
-		t.Fatalf("ScrollY should be unchanged when target is visible: got %d, want %d", tr.ScrollY, idx-1)
-	}
-}
-
-// TestReveal_ScrollsWhenTargetBelowViewport checks the inverse: a target
-// below the current viewport must move ScrollY so the row lands on screen.
-// Without this the reveal would be a no-op for files the user scrolled past.
-func TestReveal_ScrollsWhenTargetBelowViewport(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Open the nested chain so the flat list has the deep row at a
-	// non-zero index, then keep the viewport pinned at the top.
-	a := findChild(tr.Root, "a")
-	tr.Toggle(a)
-	b := findChild(a, "b")
-	tr.Toggle(b)
-	deepNode := findChild(b, "deep.go")
-	wantIdx := tr.flatIndexOf(deepNode)
-	tr.ScrollY = 0
-
-	deep := filepath.Join(root, "a", "b", "deep.go")
-	tr.Reveal(deep, 2) // tiny viewport so the target is well below it
-
-	if tr.ScrollY != wantIdx {
-		t.Fatalf("ScrollY: got %d, want %d", tr.ScrollY, wantIdx)
-	}
-}
-
-// TestReveal_DirectChildOfRoot covers the no-ancestor case: a file sitting
-// directly under the root has no directories to expand, but Reveal should
-// still scroll to it when it's off-screen.
-func TestReveal_DirectChildOfRoot(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	zeta := findChild(tr.Root, "zeta.txt")
-	if zeta == nil {
-		t.Fatal("zeta.txt missing")
-	}
-	// Park the viewport below zeta.txt so it's off-screen, then reveal.
-	wantIdx := tr.flatIndexOf(zeta)
-	tr.ScrollY = wantIdx + 5
-
-	tr.Reveal(filepath.Join(root, "zeta.txt"), 2)
-
-	if tr.ScrollY != wantIdx {
-		t.Fatalf("ScrollY: got %d, want %d", tr.ScrollY, wantIdx)
-	}
-}
-
-// TestReveal_ViewHZeroExpandsButDoesNotScroll pins the sidebar-hidden
-// contract: when viewH is 0 there's no viewport to scroll, but ancestors
-// should still be expanded so the tree is correct the next time the sidebar
-// is shown.
-func TestReveal_ViewHZeroExpandsButDoesNotScroll(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	deep := filepath.Join(root, "a", "b", "deep.go")
-
-	tr.Reveal(deep, 0)
-
-	a := findChild(tr.Root, "a")
-	b := findChild(a, "b")
-	if !a.Expanded || !b.Expanded {
-		t.Fatalf("ancestors should still expand with viewH=0: a=%+v b=%+v", a, b)
-	}
-	if tr.ScrollY != 0 {
-		t.Fatalf("ScrollY should not change with viewH=0: got %d", tr.ScrollY)
-	}
-}
-
-// TestReveal_HiddenDirIsNoop verifies Reveal gives up on paths that pass
-// through a filtered directory. .git is in the hide list, so a file under it
-// has no reachable ancestor — Reveal must bail without expanding anything
-// and without touching ScrollY.
-func TestReveal_HiddenDirIsNoop(t *testing.T) {
-	root := t.TempDir()
-	mustMkdir(t, filepath.Join(root, ".git"))
-	mustWrite(t, filepath.Join(root, ".git", "config"), "x")
-	mustWrite(t, filepath.Join(root, "visible.go"), "x")
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	scrollBefore := tr.ScrollY
-
-	tr.Reveal(filepath.Join(root, ".git", "config"), 10)
-
-	if tr.ScrollY != scrollBefore {
-		t.Fatalf("ScrollY should not change for hidden path: was %d now %d", scrollBefore, tr.ScrollY)
-	}
-}
-
-// TestReveal_OutsideRootIsNoop guards against a path that isn't under the
-// tree at all. filepath.Rel yields a ".." prefix in that case; Reveal must
-// return without mutating the tree.
-func TestReveal_OutsideRootIsNoop(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "unrelated.go")
-	mustWrite(t, outside, "x")
-	scrollBefore := tr.ScrollY
-
-	tr.Reveal(outside, 10)
-
-	if tr.ScrollY != scrollBefore {
-		t.Fatalf("ScrollY should not change for outside path: was %d now %d", scrollBefore, tr.ScrollY)
-	}
-}
-
-// TestReveal_RootItselfIsNoop pins the degenerate "reveal the root" case:
-// filepath.Rel(root, root) == ".", which Reveal treats as nothing to do.
-func TestReveal_RootItselfIsNoop(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	scrollBefore := tr.ScrollY
-
-	tr.Reveal(root, 10)
-
-	if tr.ScrollY != scrollBefore {
-		t.Fatalf("ScrollY should not change for root path: was %d now %d", scrollBefore, tr.ScrollY)
-	}
-}
-
-// TestFlatIndexOf_MatchesRenderOrder cross-checks the helper against the
-// real flattenInto walk: every node's index from flatIndexOf must agree with
-// its position in flattenInto's output. A drift here would scroll to the
-// wrong row.
-func TestFlatIndexOf_MatchesRenderOrder(t *testing.T) {
-	root := mkNested(t)
-	tr, err := New(root)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	// Expand the chain so the nested rows are in the flat list.
-	a := findChild(tr.Root, "a")
-	tr.Toggle(a)
-	b := findChild(a, "b")
-	tr.Toggle(b)
-
-	var flat []flatNode
-	for _, c := range tr.Root.Children {
-		flattenInto(c, 0, &flat)
-	}
-	for i, fn := range flat {
-		if got := tr.flatIndexOf(fn.Node); got != i {
-			t.Fatalf("flatIndexOf(%s): got %d, want %d", fn.Node.Name, got, i)
-		}
 	}
 }

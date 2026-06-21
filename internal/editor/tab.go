@@ -24,21 +24,11 @@ import (
 // pad on the right — comfortable for files of any realistic length.
 const gutterWidth = 6
 
-// GitLineChange describes the marker rendered in the editor gutter for a line.
-type GitLineChange int
-
-const (
-	GitLineNone GitLineChange = iota
-	GitLineModified
-	GitLineAdded
-	GitLineDeleted
-)
-
 // Tab is a single open file. It owns the on-disk path, the in-memory buffer,
 // the per-tab view state (scroll position, cursor, selection anchor), the
 // cached syntax-highlight styles, and a dirty flag.
 type Tab struct {
-	Path       string // Empty for an unsaved/scratch tab.
+	Path       string  // Empty for an unsaved/scratch tab.
 	Buffer     *Buffer
 	Cursor     Position // Where new typed text appears.
 	Anchor     Position // Selection anchor; equals Cursor when nothing is selected.
@@ -47,7 +37,6 @@ type Tab struct {
 	Dirty      bool
 	Styles     [][]tcell.Style
 	StyleStale bool
-	GitLines   map[int]GitLineChange
 
 	// Mtime is the file's modification time as of the last successful
 	// read or write. The app's periodic disk-reconcile loop compares it
@@ -517,6 +506,10 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		t.renderImage(scr, th, x, y, w, h)
 		return
 	}
+	if t.StyleStale {
+		t.Styles = Highlight(t.Path, t.Buffer.String(), th)
+		t.StyleStale = false
+	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
 	// every render fights the user when they scroll with the wheel.
 	if t.cursorMoved {
@@ -524,8 +517,6 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		t.cursorMoved = false
 	}
 	t.clampScroll(h)
-	t.Styles = HighlightVisible(t.Path, t.Buffer.Lines, t.ScrollY, h, th)
-	t.StyleStale = false
 
 	bg := th.BG
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text)
@@ -574,13 +565,7 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		if isCursorLine {
 			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
 		}
-		if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
-			scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
-		}
 		for i, r := range numStr {
-			if i == 0 && t.GitLines[lineIdx] != GitLineNone {
-				continue
-			}
 			scr.SetContent(x+i, cy, r, nil, gutterStyle)
 		}
 
@@ -672,25 +657,6 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	} else {
 		scr.HideCursor()
 	}
-}
-
-// gitLineMarkerRune returns the gutter glyph for a git line change.
-func gitLineMarkerRune(change GitLineChange) rune {
-	if change == GitLineDeleted {
-		return '▁'
-	}
-	return '▌'
-}
-
-// gitLineMarkerColor returns the gutter color for a git line change.
-func gitLineMarkerColor(th theme.Theme, change GitLineChange) tcell.Color {
-	if change == GitLineAdded {
-		return th.GitAdded
-	}
-	if change == GitLineDeleted {
-		return th.GitDeleted
-	}
-	return th.GitModified
 }
 
 // HitTest converts screen coordinates within this tab's render area to a
