@@ -16,9 +16,12 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/cloudmanic/spice-edit/internal/filetree"
+	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
 // Layout constants for the secondary modals. Width is wide enough to hold a
@@ -548,7 +551,7 @@ func (a *App) drawConfirm() {
 			if runeLen(line) > mw-4 {
 				line = string([]rune(line)[:mw-4])
 			}
-			drawAt(a.screen, mx+2, my+3+i, line, bodyStyle)
+			drawAt(a.screen, mx+2, my+3+i, line, confirmInfoLineStyle(a.theme, bg, line))
 		}
 		btnY := my + mh - 3
 		btnX := mx + (mw-10)/2
@@ -570,6 +573,24 @@ func (a *App) drawConfirm() {
 	drawButton(a.screen, mx+28, my+5, "[ Yes ]", bg, a.theme.Error, a.confirmHover == 1)
 
 	a.screen.HideCursor()
+}
+
+// confirmInfoLineStyle colors git diff previews inside the info modal.
+func confirmInfoLineStyle(th theme.Theme, bg tcell.Color, line string) tcell.Style {
+	style := tcell.StyleDefault.Background(bg).Foreground(th.Text)
+	if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+		return style.Foreground(th.Muted)
+	}
+	if strings.HasPrefix(line, "+") {
+		return style.Foreground(th.GitAdded)
+	}
+	if strings.HasPrefix(line, "-") {
+		return style.Foreground(th.GitDeleted)
+	}
+	if strings.HasPrefix(line, "@@") {
+		return style.Foreground(th.AccentSoft).Bold(true)
+	}
+	return style
 }
 
 // -----------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudmanic/spice-edit/internal/filetree"
 	"github.com/cloudmanic/spice-edit/internal/finder"
 	"github.com/gdamore/tcell/v2"
 )
@@ -241,6 +242,82 @@ func TestLeader_PFiresFinder(t *testing.T) {
 	if !a.finderOpen {
 		t.Fatal("Esc-p should open the finder")
 	}
+}
+
+// TestFinder_EnterRevealsFileInTree is the headline fix for the sidebar-sync
+// bug: opening a file via the finder (Esc-p → type → Enter) used to set the
+// active-file highlight on a row nobody could see, because the tree stayed
+// collapsed at the top. After the fix, openFile calls tree.Reveal, which
+// expands every ancestor and scrolls the row into view. This test opens a
+// nested file under internal/finder/ through the finder keystroke loop and
+// asserts both that the ancestor dir is expanded and that the file's row is
+// inside the tree's viewport (via the public HitTest contract).
+func TestFinder_EnterRevealsFileInTree(t *testing.T) {
+	a, dir := withFinder(t)
+	a.openFinder()
+	for _, r := range "score" {
+		a.handleFinderKey(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	if len(a.finderResults) == 0 {
+		t.Fatal("expected score results")
+	}
+	rel := a.finderResults[0].Path
+	want := filepath.Join(dir, rel)
+
+	a.handleFinderKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+	// The finder returns paths like "internal/finder/score.go" — so the
+	// "internal" ancestor must now be expanded, and the file's row must be
+	// inside the tree's viewport.
+	internal := treeChildByName(a.tree.Root, "internal")
+	if internal == nil {
+		t.Fatal("internal/ ancestor missing from tree")
+	}
+	if !internal.Expanded {
+		t.Fatal("internal/ should be expanded after opening via finder")
+	}
+	if a.tree.ActiveFile != want {
+		t.Fatalf("ActiveFile: got %q, want %q", a.tree.ActiveFile, want)
+	}
+	// Re-render so the tree's visible-rows cache reflects the post-reveal
+	// flat list, then walk the list rows via HitTest and confirm the file
+	// is on screen. Using the public HitTest contract keeps the test honest
+	// about what a user would actually see.
+	sx, sy, sw, sh := a.sidebarRect()
+	a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+	listH := sh - 2
+	if listH < 0 {
+		listH = 0
+	}
+	found := false
+	for row := 0; row < listH; row++ {
+		n, ok := a.tree.HitTest(0, row+2) // list rows start at localY 2
+		if !ok || n == nil {
+			continue
+		}
+		if n.Path == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("opened file %q not visible in tree after reveal (ScrollY=%d)", rel, a.tree.ScrollY)
+	}
+}
+
+// treeChildByName returns the direct child of n named name, or nil. A tiny
+// local helper so the finder-reveal test can inspect ancestor expansion
+// without reaching into the package's private fields.
+func treeChildByName(n *filetree.Node, name string) *filetree.Node {
+	if n == nil {
+		return nil
+	}
+	for _, c := range n.Children {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 // endsWith is a tiny string suffix check pulled in so the result-

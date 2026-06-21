@@ -160,3 +160,25 @@ func (f *Foo) Bar() string {
 		}
 	}
 }
+
+// TestHighlightVisible_LimitsTokenisingToViewport pins the fast path:
+// off-screen rows stay empty while visible rows are tokenised.
+func TestHighlightVisible_LimitsTokenisingToViewport(t *testing.T) {
+	th := theme.Default()
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = "package main"
+	}
+
+	got := HighlightVisible("main.go", lines, 10, 2, th)
+	if len(got) != len(lines) {
+		t.Fatalf("rows = %d, want %d", len(got), len(lines))
+	}
+	if got[0] != nil {
+		t.Fatalf("off-screen row was highlighted, got %v", got[0])
+	}
+	base := tcell.StyleDefault.Background(th.BG).Foreground(th.Text)
+	if got[10][0] == base {
+		t.Fatal("visible row was not highlighted")
+	}
+}

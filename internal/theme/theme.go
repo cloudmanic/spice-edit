@@ -25,14 +25,19 @@ type Theme struct {
 	LineHL    tcell.Color // Active line highlight.
 
 	// --- Foregrounds & accents ---
-	Text       tcell.Color // Primary editor text.
-	Muted      tcell.Color // Line numbers, inactive tabs, secondary UI text.
-	Subtle     tcell.Color // Even more subtle (separators, hints).
-	Accent     tcell.Color // Active tab accent, root label, important UI.
-	AccentSoft tcell.Color // Softer accent (active line number).
-	Selection  tcell.Color // Selection background.
-	Modified   tcell.Color // Dirty indicator (unsaved changes).
-	Error      tcell.Color // Error messages.
+	Text        tcell.Color // Primary editor text.
+	Muted       tcell.Color // Line numbers, inactive tabs, secondary UI text.
+	Subtle      tcell.Color // Even more subtle (separators, hints).
+	Accent      tcell.Color // Active tab accent, root label, important UI.
+	AccentSoft  tcell.Color // Softer accent (active line number).
+	Selection   tcell.Color // Selection background.
+	Modified    tcell.Color // Dirty indicator (unsaved changes).
+	Error       tcell.Color // Error messages.
+	GitModified tcell.Color
+	GitAdded    tcell.Color
+	GitDeleted  tcell.Color
+	GitRenamed  tcell.Color
+	GitMixed    tcell.Color
 
 	// FindMatch / FindCurrent paint search hits in the editor body.
 	// FindMatch is a soft tint applied to every match in the viewport;
@@ -72,14 +77,19 @@ func Default() Theme {
 		LineHL:    tcell.NewRGBColor(0x1f, 0x20, 0x2e),
 
 		// Foregrounds & accents.
-		Text:       tcell.NewRGBColor(0xc0, 0xca, 0xf5),
-		Muted:      tcell.NewRGBColor(0x56, 0x5f, 0x89),
-		Subtle:     tcell.NewRGBColor(0x32, 0x34, 0x4a),
-		Accent:     tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		AccentSoft: tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
-		Selection:  tcell.NewRGBColor(0x33, 0x46, 0x7c),
-		Modified:   tcell.NewRGBColor(0xe0, 0xaf, 0x68),
-		Error:      tcell.NewRGBColor(0xf7, 0x76, 0x8e),
+		Text:        tcell.NewRGBColor(0xc0, 0xca, 0xf5),
+		Muted:       tcell.NewRGBColor(0x56, 0x5f, 0x89),
+		Subtle:      tcell.NewRGBColor(0x32, 0x34, 0x4a),
+		Accent:      tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
+		AccentSoft:  tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
+		Selection:   tcell.NewRGBColor(0x33, 0x46, 0x7c),
+		Modified:    tcell.NewRGBColor(0xe0, 0xaf, 0x68),
+		Error:       tcell.NewRGBColor(0xf7, 0x76, 0x8e),
+		GitModified: tcell.NewRGBColor(0xff, 0x9e, 0x64),
+		GitAdded:    tcell.NewRGBColor(0x9e, 0xce, 0x6a),
+		GitDeleted:  tcell.NewRGBColor(0xf7, 0x76, 0x8e),
+		GitRenamed:  tcell.NewRGBColor(0x7d, 0xcf, 0xf7),
+		GitMixed:    tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
 
 		// Find. FindMatch is a desaturated amber so it reads as "all
 		// hits" without competing with the syntax palette. FindCurrent
