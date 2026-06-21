@@ -19,7 +19,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/cloudmanic/spice-edit/internal/editor"
+	"github.com/cloudmanic/spice-edit/internal/filetree"
 )
 
 // TestLoadGitStatus_NotARepo verifies that pointing the loader at a
@@ -53,7 +57,7 @@ func TestLoadGitStatus_EmptyRoot(t *testing.T) {
 func TestLoadGitStatus_CleanRepo(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
-	writeFileT(t,filepath.Join(repo, "a.txt"), "hello")
+	writeFileT(t, filepath.Join(repo, "a.txt"), "hello")
 	gitRun(t, repo, "add", "a.txt")
 	gitRun(t, repo, "commit", "-m", "init")
 
@@ -139,16 +143,16 @@ func TestLoadGitStatus_FindsModifiedAndUntracked(t *testing.T) {
 	requireGit(t)
 	repo := initRepo(t)
 
-	writeFileT(t,filepath.Join(repo, "tracked.txt"), "v1")
+	writeFileT(t, filepath.Join(repo, "tracked.txt"), "v1")
 	gitRun(t, repo, "add", "tracked.txt")
 	gitRun(t, repo, "commit", "-m", "init")
 
 	// Modify the tracked file (worktree change).
-	writeFileT(t,filepath.Join(repo, "tracked.txt"), "v2")
+	writeFileT(t, filepath.Join(repo, "tracked.txt"), "v2")
 	// Brand-new untracked file.
-	writeFileT(t,filepath.Join(repo, "untracked.txt"), "fresh")
+	writeFileT(t, filepath.Join(repo, "untracked.txt"), "fresh")
 	// Staged-but-uncommitted.
-	writeFileT(t,filepath.Join(repo, "staged.txt"), "added")
+	writeFileT(t, filepath.Join(repo, "staged.txt"), "added")
 	gitRun(t, repo, "add", "staged.txt")
 
 	st := loadGitStatus(repo)
@@ -157,7 +161,7 @@ func TestLoadGitStatus_FindsModifiedAndUntracked(t *testing.T) {
 	}
 	for _, want := range []string{"tracked.txt", "untracked.txt", "staged.txt"} {
 		abs := filepath.Join(repo, want)
-		if !st.DirtyFiles[abs] {
+		if st.DirtyFiles[abs] == filetree.GitChangeNone {
 			t.Errorf("expected %s to be dirty; got %v", want, sortedKeys(st.DirtyFiles))
 		}
 	}
@@ -175,14 +179,14 @@ func TestLoadGitStatus_FromSubdirectory(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	writeFileT(t,filepath.Join(sub, "inside.txt"), "x")
-	writeFileT(t,filepath.Join(repo, "outside.txt"), "y")
+	writeFileT(t, filepath.Join(sub, "inside.txt"), "x")
+	writeFileT(t, filepath.Join(repo, "outside.txt"), "y")
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "init")
 
 	// Mutate both files so they appear dirty.
-	writeFileT(t,filepath.Join(sub, "inside.txt"), "x2")
-	writeFileT(t,filepath.Join(repo, "outside.txt"), "y2")
+	writeFileT(t, filepath.Join(sub, "inside.txt"), "x2")
+	writeFileT(t, filepath.Join(repo, "outside.txt"), "y2")
 
 	st := loadGitStatus(sub)
 	if !st.IsRepo {
@@ -192,7 +196,7 @@ func TestLoadGitStatus_FromSubdirectory(t *testing.T) {
 		filepath.Join(sub, "inside.txt"),
 		filepath.Join(repo, "outside.txt"),
 	} {
-		if !st.DirtyFiles[want] {
+		if st.DirtyFiles[want] == filetree.GitChangeNone {
 			t.Errorf("expected %s to be dirty; got %v", want, sortedKeys(st.DirtyFiles))
 		}
 	}
@@ -259,11 +263,72 @@ func TestParsePorcelain_BasicCases(t *testing.T) {
 					len(got), sortedKeys(got))
 			}
 			for _, k := range tc.wantKeys {
-				if !got[k] {
+				if got[k] == filetree.GitChangeNone {
 					t.Errorf("missing %q in %v", k, sortedKeys(got))
 				}
 			}
 		})
+	}
+}
+
+// TestParsePorcelain_StatusKinds confirms the tree can color different git
+// states distinctly instead of collapsing everything to one dirty color.
+func TestParsePorcelain_StatusKinds(t *testing.T) {
+	top := "/tmp/repo"
+	got := parsePorcelain([]byte(" M mod.go\n?? new.go\n D gone.go\nR  old.go -> moved.go\n"), top)
+	want := map[string]filetree.GitChangeKind{
+		"/tmp/repo/mod.go":   filetree.GitChangeModified,
+		"/tmp/repo/new.go":   filetree.GitChangeAdded,
+		"/tmp/repo/gone.go":  filetree.GitChangeDeleted,
+		"/tmp/repo/old.go":   filetree.GitChangeDeleted,
+		"/tmp/repo/moved.go": filetree.GitChangeRenamed,
+	}
+	for path, kind := range want {
+		if got[path] != kind {
+			t.Fatalf("%s kind = %v, want %v; got %v", path, got[path], kind, got)
+		}
+	}
+}
+
+// TestParseGitDiffLines maps unified hunk ranges to zero-based gutter rows.
+func TestParseGitDiffLines(t *testing.T) {
+	diff := []byte("@@ -2,0 +3,2 @@\n+a\n+b\n@@ -8,2 +10,2 @@\n-old\n+new\n@@ -20,2 +21,0 @@\n-old\n")
+	got := parseGitDiffLines(diff)
+	if got[2] != editor.GitLineAdded || got[3] != editor.GitLineAdded {
+		t.Fatalf("added markers wrong: %v", got)
+	}
+	if got[9] != editor.GitLineModified || got[10] != editor.GitLineModified {
+		t.Fatalf("modified markers wrong: %v", got)
+	}
+	if got[21] != editor.GitLineDeleted {
+		t.Fatalf("deleted marker wrong: %v", got)
+	}
+}
+
+// TestParseGitHunkPreview_ReturnsClickedHunk keeps gutter-click previews scoped
+// to the hunk covering the clicked changed line.
+func TestParseGitHunkPreview_ReturnsClickedHunk(t *testing.T) {
+	diff := []byte("diff --git a/a.go b/a.go\n@@ -1,2 +1,2 @@\n old context\n-old\n+new\n@@ -20,1 +20,2 @@\n keep\n+added\n")
+	got := parseGitHunkPreview(diff, 20)
+	if len(got) == 0 {
+		t.Fatal("expected hunk preview")
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "+added") {
+		t.Fatalf("expected clicked hunk, got %q", joined)
+	}
+	if strings.Contains(joined, "-old") {
+		t.Fatalf("preview included wrong hunk: %q", joined)
+	}
+}
+
+// TestLineInHunk_IncludesDeletionAnchor pins deleted-line marker matching.
+func TestLineInHunk_IncludesDeletionAnchor(t *testing.T) {
+	if !lineInHunk(12, 12, 0) {
+		t.Fatal("deleted-only hunk should match its anchor line")
+	}
+	if lineInHunk(13, 12, 0) {
+		t.Fatal("deleted-only hunk should not match unrelated lines")
 	}
 }
 
@@ -273,14 +338,14 @@ func TestParsePorcelain_BasicCases(t *testing.T) {
 // rather than dropping the path entirely.
 func TestUnquotePath_Variants(t *testing.T) {
 	cases := map[string]string{
-		`plain.txt`:           `plain.txt`,
-		`"quoted.txt"`:        `quoted.txt`,
-		`"with space.txt"`:    `with space.txt`,
-		`"escaped\nnewline"`:  "escaped\nnewline",
-		`""`:                  ``,
-		`   spaced.txt   `:    `spaced.txt`,
-		``:                    ``,
-		`"unterminated`:       `"unterminated`, // malformed → raw fallback
+		`plain.txt`:          `plain.txt`,
+		`"quoted.txt"`:       `quoted.txt`,
+		`"with space.txt"`:   `with space.txt`,
+		`"escaped\nnewline"`: "escaped\nnewline",
+		`""`:                 ``,
+		`   spaced.txt   `:   `spaced.txt`,
+		``:                   ``,
+		`"unterminated`:      `"unterminated`, // malformed → raw fallback
 	}
 	for in, want := range cases {
 		if got := unquotePath(in); got != want {
@@ -294,9 +359,9 @@ func TestUnquotePath_Variants(t *testing.T) {
 // collapsed branch still shows the user there's a change inside.
 func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
 	root := "/proj"
-	dirty := map[string]bool{
-		"/proj/a/b/c/leaf.txt": true,
-		"/proj/x/y.txt":        true,
+	dirty := map[string]filetree.GitChangeKind{
+		"/proj/a/b/c/leaf.txt": filetree.GitChangeModified,
+		"/proj/x/y.txt":        filetree.GitChangeModified,
 	}
 	got := dirtyFolderSet(dirty, root)
 
@@ -308,12 +373,12 @@ func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
 		"/proj/x",
 	}
 	for _, w := range want {
-		if !got[w] {
+		if got[w] == filetree.GitChangeNone {
 			t.Errorf("expected %q to be marked dirty; got %v", w, sortedKeys(got))
 		}
 	}
 	// The leaf file path itself isn't a folder, must not appear here.
-	if got["/proj/a/b/c/leaf.txt"] {
+	if got["/proj/a/b/c/leaf.txt"] != filetree.GitChangeNone {
 		t.Error("dirtyFolderSet should not contain file paths")
 	}
 }
@@ -323,19 +388,19 @@ func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
 // or the user's home directory can't be marked dirty by us.
 func TestDirtyFolderSet_StopsAtRoot(t *testing.T) {
 	root := "/proj/inner"
-	dirty := map[string]bool{
-		"/proj/inner/a/b.txt": true,
+	dirty := map[string]filetree.GitChangeKind{
+		"/proj/inner/a/b.txt": filetree.GitChangeModified,
 	}
 	got := dirtyFolderSet(dirty, root)
 	for _, ancestor := range []string{"/proj", "/", "/home"} {
-		if got[ancestor] {
+		if got[ancestor] != filetree.GitChangeNone {
 			t.Errorf("walk escaped root: %q should not be marked", ancestor)
 		}
 	}
-	if !got["/proj/inner"] {
+	if got["/proj/inner"] == filetree.GitChangeNone {
 		t.Error("root itself should be marked when something inside is dirty")
 	}
-	if !got["/proj/inner/a"] {
+	if got["/proj/inner/a"] == filetree.GitChangeNone {
 		t.Error("intermediate folder should be marked")
 	}
 }
@@ -349,6 +414,35 @@ func TestDirtyFolderSet_EmptyInput(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty map, got %v", got)
+	}
+}
+
+// TestRebaseGitPaths_NormalizesTreeRootCasing keeps git and filetree path keys
+// aligned on case-insensitive filesystems where cwd casing may drift.
+func TestRebaseGitPaths_NormalizesTreeRootCasing(t *testing.T) {
+	dirty := map[string]filetree.GitChangeKind{
+		"/Users/fatih/Documents/Projeler/spice-edit/internal/app/app.go": filetree.GitChangeModified,
+	}
+	rebased := rebaseGitPaths(dirty, "/Users/fatih/documents/projeler/spice-edit")
+	want := "/Users/fatih/documents/projeler/spice-edit/internal/app/app.go"
+	if rebased[want] != filetree.GitChangeModified {
+		t.Fatalf("rebased path missing: got %v want key %q", rebased, want)
+	}
+}
+
+// TestRebaseGitPaths_DoesNotMoveRepoPathsUnderSubdirRoot protects launches
+// rooted at a subdirectory: only descendants of that tree root are rebased.
+func TestRebaseGitPaths_DoesNotMoveRepoPathsUnderSubdirRoot(t *testing.T) {
+	dirty := map[string]filetree.GitChangeKind{
+		"/repo/internal/app/app.go":    filetree.GitChangeModified,
+		"/repo/internal/editor/tab.go": filetree.GitChangeModified,
+	}
+	rebased := rebaseGitPaths(dirty, "/repo/internal/app")
+	if rebased["/repo/internal/app/app.go"] != filetree.GitChangeModified {
+		t.Fatalf("descendant path should stay under subdir root, got %v", rebased)
+	}
+	if rebased["/repo/internal/editor/tab.go"] != filetree.GitChangeModified {
+		t.Fatalf("outside path should remain unchanged, got %v", rebased)
 	}
 }
 
@@ -435,7 +529,7 @@ func writeFileT(t *testing.T, path, content string) {
 
 // sortedKeys returns the keys of m in lexicographic order — handy when
 // printing diff context inside test failures.
-func sortedKeys(m map[string]bool) []string {
+func sortedKeys[K comparable](m map[string]K) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
