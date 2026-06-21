@@ -156,6 +156,7 @@ type clickRecord struct {
 type menuItemDef struct {
 	label    string
 	relY     int
+	shortcut string
 	action   func(*App)
 	enabled  func(*App) bool
 	labelFor func(*App) string
@@ -174,24 +175,24 @@ func builtinMenuGroups() [][]menuItemDef {
 	return [][]menuItemDef{
 		// Tab actions
 		{
-			{label: "Save", action: (*App).menuSave, enabled: (*App).hasSavableTab},
+			{label: "Save", shortcut: "Esc s", action: (*App).menuSave, enabled: (*App).hasSavableTab},
 			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
-			{label: "Close tab", action: (*App).menuClose, enabled: (*App).hasTab},
+			{label: "Close tab", shortcut: "Esc w", action: (*App).menuClose, enabled: (*App).hasTab},
 		},
 		// History
 		{
-			{label: "Undo", action: (*App).menuUndo, enabled: (*App).hasUndo},
-			{label: "Redo", action: (*App).menuRedo, enabled: (*App).hasRedo},
+			{label: "Undo", shortcut: "Esc u", action: (*App).menuUndo, enabled: (*App).hasUndo},
+			{label: "Redo", shortcut: "Esc r", action: (*App).menuRedo, enabled: (*App).hasRedo},
 			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
 		// Search
 		{
-			{label: "Find in file", action: (*App).menuFind, enabled: (*App).hasFindable},
-			{label: "Find file in project", action: (*App).menuFindFile, enabled: (*App).hasFinder},
+			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
+			{label: "Find file in project", shortcut: "Esc p", action: (*App).menuFindFile, enabled: (*App).hasFinder},
 		},
 		// File actions
 		{
-			{action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
 			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
@@ -204,15 +205,15 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
 			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
-			{label: "Toggle line comment", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
+			{label: "Toggle line comment", shortcut: "Esc /", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
 		{
-			{action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
+			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
 		},
 		// Quit
 		{
-			{label: "Quit editor", action: (*App).menuQuit, enabled: alwaysTrue},
+			{label: "Quit editor", shortcut: "Esc q", action: (*App).menuQuit, enabled: alwaysTrue},
 		},
 	}
 }
@@ -947,6 +948,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// editing keys are blocked, but Down/Up move the highlight and Enter
 	// activates the highlighted row.
 	if a.menuOpen {
+		if ev.Key() == tcell.KeyRune {
+			if action := leaderActionFor(ev.Rune()); action != nil {
+				a.lastEscape = time.Time{}
+				action(a)
+				return
+			}
+		}
 		switch ev.Key() {
 		case tcell.KeyDown:
 			a.menuMoveSelection(1)
@@ -2452,7 +2460,7 @@ func (a *App) drawMenu() {
 		enabled := item.enabled(a)
 		hovered := enabled && i == a.hoveredMenuRow
 
-		var labelStyle, chevStyle tcell.Style
+		var labelStyle, chevStyle, shortcutStyle tcell.Style
 		switch {
 		case hovered:
 			// Paint the row's interior with the hover background first.
@@ -2461,12 +2469,15 @@ func (a *App) drawMenu() {
 			}
 			labelStyle = hoverStyle
 			chevStyle = hoverChevStyle
+			shortcutStyle = tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.Muted).Bold(true)
 		case enabled:
 			labelStyle = bgStyle
 			chevStyle = chevronStyle
+			shortcutStyle = mutedStyle
 		default:
 			labelStyle = mutedStyle
 			chevStyle = mutedStyle
+			shortcutStyle = mutedStyle
 		}
 		// Dynamic label (e.g. the file-explorer toggle row) takes precedence
 		// over the static one when present.
@@ -2475,7 +2486,14 @@ func (a *App) drawMenu() {
 			label = item.labelFor(a)
 		}
 		drawAt(a.screen, mx+2, cy, "▸", chevStyle)
+		if item.shortcut == "" {
+			drawAt(a.screen, mx+4, cy, label, labelStyle)
+			continue
+		}
+		shortcutX := mx + mw - 2 - runeLen(item.shortcut)
+		label = trimRunes(label, shortcutX-(mx+4)-2)
 		drawAt(a.screen, mx+4, cy, label, labelStyle)
+		drawAt(a.screen, shortcutX, cy, item.shortcut, shortcutStyle)
 	}
 
 	a.screen.HideCursor()
@@ -2502,6 +2520,22 @@ func drawAt(scr tcell.Screen, x, y int, s string, st tcell.Style) {
 		scr.SetContent(x+col, y, r, nil, st)
 		col++
 	}
+}
+
+// trimRunes shortens s to max visible cells, reserving the final cell for an
+// ellipsis when truncation is needed.
+func trimRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if runeLen(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	rs := []rune(s)
+	return string(rs[:max-1]) + "…"
 }
 
 // detectLangLabel returns a short label for the active file's language —
