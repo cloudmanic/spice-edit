@@ -29,8 +29,26 @@ func Highlight(filename, src string, t theme.Theme) [][]tcell.Style {
 	return highlightSource(filename, src, t)
 }
 
-// HighlightVisible returns a style grid for the current viewport. Only visible
-// rows are tokenised so keystroke cost follows terminal height, not file size.
+// highlightLeadLines is how many rows above and below the viewport we
+// tokenise but discard, so the lexer can re-enter state it couldn't see
+// otherwise, like a multi-line comment or quoted string that spans the
+// viewport. Without this lead, scrolling into the middle of a long comment
+// colours the body as plain code because the lexer starts fresh at the
+// viewport. The lead runs both above and below: chroma needs both
+// delimiters of a multi-line block in range to colour the body, so a
+// comment that opens above and closes below the viewport needs the opener
+// reached by the upper lead and the closer reached by the lower lead.
+// Bounded so keystroke cost still follows terminal height, not file size:
+// a block longer than the combined lead is the rare case that still
+// mis-colours.
+const highlightLeadLines = 256
+
+// HighlightVisible returns a style grid for the current viewport. Only
+// visible rows are kept in the output so keystroke cost follows terminal
+// height, not file size. To stay correct inside multi-line comments and
+// strings that span the viewport, tokenisation starts a bounded lead above
+// the top and ends a bounded lead below the bottom; those lead rows are
+// styled then thrown away.
 func HighlightVisible(filename string, lines []string, startLine, height int, t theme.Theme) [][]tcell.Style {
 	styles := make([][]tcell.Style, len(lines))
 	if height <= 0 || startLine >= len(lines) {
@@ -43,14 +61,26 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 	if endLine > len(lines) {
 		endLine = len(lines)
 	}
-	visible := strings.Join(lines[startLine:endLine], "\n")
-	visibleStyles := highlightSource(filename, visible, t)
-	for i, row := range visibleStyles {
-		lineIdx := startLine + i
-		if lineIdx >= endLine || lineIdx >= len(styles) {
+	// Tokenise a bounded lead above and below the viewport. The upper lead
+	// lets the lexer re-enter comment / string state opened earlier; the
+	// lower lead closes blocks that end past the viewport. We keep only the
+	// visible rows; the lead rows are styled then dropped.
+	leadStart := startLine - highlightLeadLines
+	if leadStart < 0 {
+		leadStart = 0
+	}
+	leadEnd := endLine + highlightLeadLines
+	if leadEnd > len(lines) {
+		leadEnd = len(lines)
+	}
+	src := strings.Join(lines[leadStart:leadEnd], "\n")
+	leadStyles := highlightSource(filename, src, t)
+	for i := startLine; i < endLine; i++ {
+		idx := i - leadStart
+		if idx >= len(leadStyles) {
 			break
 		}
-		styles[lineIdx] = row
+		styles[i] = leadStyles[idx]
 	}
 	return styles
 }

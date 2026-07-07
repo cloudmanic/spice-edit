@@ -162,7 +162,9 @@ func (f *Foo) Bar() string {
 }
 
 // TestHighlightVisible_LimitsTokenisingToViewport pins the fast path:
-// off-screen rows stay empty while visible rows are tokenised.
+// off-screen rows stay empty in the output while visible rows are tokenised.
+// (A bounded lead above the viewport is also tokenised but discarded, so the
+// output grid still only carries the visible rows.)
 func TestHighlightVisible_LimitsTokenisingToViewport(t *testing.T) {
 	th := theme.Default()
 	lines := make([]string, 20)
@@ -180,5 +182,48 @@ func TestHighlightVisible_LimitsTokenisingToViewport(t *testing.T) {
 	base := tcell.StyleDefault.Background(th.BG).Foreground(th.Text)
 	if got[10][0] == base {
 		t.Fatal("visible row was not highlighted")
+	}
+}
+
+// TestHighlightVisible_LeadRecoversCommentState proves the bounded lead
+// fixes the regression where scrolling into the middle of a multi-line
+// comment coloured the body as plain code. The comment opens above the
+// viewport; without the lead the lexer would start fresh at the visible
+// rows and never know it was inside a comment.
+func TestHighlightVisible_LeadRecoversCommentState(t *testing.T) {
+	th := theme.Default()
+	// A multi-line comment opens on line 1 and closes on line 6. The
+	// viewport starts on line 4, inside the comment, with the opening /*
+	// above the visible rows.
+	lines := []string{
+		"package main",   // 0
+		"/*",             // 1  <- comment opens
+		" * body one",    // 2
+		" * body two",    // 3
+		" * body three",  // 4  <- viewport start
+		" * body four",   // 5
+		" */",            // 6
+		"func main() {}", // 7
+	}
+	got := HighlightVisible("main.go", lines, 4, 2, th)
+	comment := tcell.StyleDefault.Background(th.BG).Foreground(th.SynComment).Italic(true)
+	for _, i := range []int{4, 5} {
+		row := got[i]
+		if row == nil {
+			t.Fatalf("line %d was not highlighted", i)
+		}
+		// At least one rune on each visible comment body line must carry
+		// the comment style, proving the lead let the lexer re-enter the
+		// block instead of tokenising the body as plain text.
+		hasComment := false
+		for _, st := range row {
+			if st == comment {
+				hasComment = true
+				break
+			}
+		}
+		if !hasComment {
+			t.Errorf("line %d has no comment-styled rune; lead did not recover comment state", i)
+		}
 	}
 }
