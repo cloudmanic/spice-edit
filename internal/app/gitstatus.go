@@ -251,7 +251,7 @@ func loadGitLineChanges(rootDir, path string) map[int]editor.GitLineChange {
 	if rootDir == "" || path == "" {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=0", "--", path).Output()
+	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=0", "HEAD", "--", path).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
@@ -263,7 +263,7 @@ func loadGitHunkPreview(rootDir, path string, line int) []string {
 	if rootDir == "" || path == "" || line < 0 {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=3", "--", path).Output()
+	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=3", "HEAD", "--", path).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}

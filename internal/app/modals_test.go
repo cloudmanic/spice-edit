@@ -83,6 +83,26 @@ func TestConfirmInfoLineStyle_ColorsDiffLines(t *testing.T) {
 	}
 }
 
+func TestConfirmInfoScroll_ClampsToViewport(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.width = 100
+	a.height = 12
+	lines := make([]string, 20)
+	a.openInfo("Git change", lines)
+
+	if got := a.confirmInfoBodyRows(); got != 5 {
+		t.Fatalf("body rows = %d, want 5", got)
+	}
+	a.scrollConfirmInfo(100)
+	if want := len(lines) - 5; a.confirmInfoScroll != want {
+		t.Fatalf("scroll = %d, want %d", a.confirmInfoScroll, want)
+	}
+	a.scrollConfirmInfo(-100)
+	if a.confirmInfoScroll != 0 {
+		t.Fatalf("scroll = %d, want 0", a.confirmInfoScroll)
+	}
+}
+
 // TestAnyModalOpen returns true for any one flag and false for none.
 func TestAnyModalOpen(t *testing.T) {
 	a := newTestApp(t, t.TempDir())

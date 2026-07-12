@@ -73,6 +73,27 @@ func TestLoadGitStatus_CleanRepo(t *testing.T) {
 	}
 }
 
+// TestLoadGitLineChanges_IncludesStagedChanges compares the worktree with HEAD,
+// so staging a file does not remove its gutter markers.
+func TestLoadGitLineChanges_IncludesStagedChanges(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	path := filepath.Join(repo, "a.txt")
+	writeFileT(t, path, "one\ntwo\nthree\n")
+	gitRun(t, repo, "add", "a.txt")
+	gitRun(t, repo, "commit", "-m", "init")
+	writeFileT(t, path, "one\nchanged\nthree\nfour\n")
+	gitRun(t, repo, "add", "a.txt")
+
+	changes := loadGitLineChanges(repo, "a.txt")
+	if len(changes) == 0 {
+		t.Fatal("staged changes should produce gutter markers")
+	}
+	if got := changes[1]; got != editor.GitLineModified {
+		t.Fatalf("line 2 marker = %v, want modified", got)
+	}
+}
+
 // TestLoadGitBranch_NotARepo confirms the helper degrades quietly when
 // the directory isn't a git work tree — empty string, no panic, no
 // stderr noise reaching the editor.

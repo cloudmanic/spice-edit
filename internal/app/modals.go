@@ -80,6 +80,7 @@ func (a *App) closeAllModals() {
 	a.formCallback = nil
 	a.confirmInfo = false
 	a.confirmMessageLines = nil
+	a.confirmInfoScroll = 0
 	// confirmCancelHook is parked here so an unrelated confirm modal
 	// opened after a format-trust / format-install prompt can't
 	// accidentally inherit the cancel hook. The flows that need a
@@ -365,6 +366,7 @@ func (a *App) openInfo(title string, lines []string) {
 	a.confirmInfo = true
 	a.confirmTitle = title
 	a.confirmMessageLines = lines
+	a.confirmInfoScroll = 0
 	a.confirmHover = 0
 }
 
@@ -406,6 +408,14 @@ func (a *App) handleConfirmKey(ev *tcell.EventKey) {
 		switch ev.Key() {
 		case tcell.KeyEsc, tcell.KeyEnter, tcell.KeyTab:
 			a.closeAllModals()
+		case tcell.KeyUp:
+			a.scrollConfirmInfo(-1)
+		case tcell.KeyDown:
+			a.scrollConfirmInfo(1)
+		case tcell.KeyPgUp:
+			a.scrollConfirmInfo(-a.confirmInfoBodyRows())
+		case tcell.KeyPgDn:
+			a.scrollConfirmInfo(a.confirmInfoBodyRows())
 		}
 		return
 	}
@@ -438,6 +448,14 @@ func (a *App) handleConfirmMouse(x, y int, btn tcell.ButtonMask) {
 	if a.confirmInfo {
 		// Single OK button at row mh-3, centered. Outside the modal
 		// dismisses too — same convention as the rest of the modals.
+		if btn&tcell.Button4 != 0 {
+			a.scrollConfirmInfo(-3)
+			return
+		}
+		if btn&tcell.Button5 != 0 {
+			a.scrollConfirmInfo(3)
+			return
+		}
 		if btn&tcell.Button1 == 0 {
 			return
 		}
@@ -491,13 +509,7 @@ func (a *App) confirmModalRect() (x, y, w, h int) {
 	h = confirmModalHeight
 	if a.confirmInfo {
 		w = 84
-		bodyRows := len(a.confirmMessageLines)
-		if bodyRows < 1 {
-			bodyRows = 1
-		}
-		// Chrome budget: top border + title + divider + blank + button + blank + bottom = 7,
-		// but we want at least one blank between body and button. Match
-		// the layout in drawConfirm so this stays in lockstep.
+		bodyRows := a.confirmInfoBodyRows()
 		h = bodyRows + 7
 	}
 	x = (a.width - w) / 2
@@ -509,6 +521,39 @@ func (a *App) confirmModalRect() (x, y, w, h int) {
 		y = 0
 	}
 	return
+}
+
+// confirmInfoBodyRows returns the visible diff viewport height.
+func (a *App) confirmInfoBodyRows() int {
+	const chromeRows = 7
+	rows := a.height - chromeRows
+	if rows < 1 {
+		return 1
+	}
+	if len(a.confirmMessageLines) < rows {
+		if len(a.confirmMessageLines) < 1 {
+			return 1
+		}
+		return len(a.confirmMessageLines)
+	}
+	return rows
+}
+
+func (a *App) scrollConfirmInfo(delta int) {
+	if !a.confirmInfo {
+		return
+	}
+	maxScroll := len(a.confirmMessageLines) - a.confirmInfoBodyRows()
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	a.confirmInfoScroll += delta
+	if a.confirmInfoScroll < 0 {
+		a.confirmInfoScroll = 0
+	}
+	if a.confirmInfoScroll > maxScroll {
+		a.confirmInfoScroll = maxScroll
+	}
 }
 
 // drawConfirm renders the Yes/No modal.
@@ -547,7 +592,13 @@ func (a *App) drawConfirm() {
 		// OK button. The body is left-aligned because scp/ssh stderr
 		// usually starts with file paths that read poorly when
 		// centered.
-		for i, line := range a.confirmMessageLines {
+		bodyRows := a.confirmInfoBodyRows()
+		a.scrollConfirmInfo(0)
+		end := a.confirmInfoScroll + bodyRows
+		if end > len(a.confirmMessageLines) {
+			end = len(a.confirmMessageLines)
+		}
+		for i, line := range a.confirmMessageLines[a.confirmInfoScroll:end] {
 			if runeLen(line) > mw-4 {
 				line = string([]rune(line)[:mw-4])
 			}

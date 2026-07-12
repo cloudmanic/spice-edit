@@ -350,6 +350,7 @@ type App struct {
 	// scp / ssh diagnostics that naturally wrap.
 	confirmInfo         bool
 	confirmMessageLines []string
+	confirmInfoScroll   int
 
 	// Save/Discard/Cancel modal — used when closing a dirty tab or
 	// quitting with unsaved changes. dirtyHover indexes the button row:
