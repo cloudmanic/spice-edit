@@ -12,6 +12,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -19,16 +20,44 @@ import (
 	"github.com/cloudmanic/spice-edit/internal/theme"
 )
 
-// gutterWidth is the cell width reserved for the line-number column inside
-// the editor area. Six gives us up to five-digit line numbers plus a one-cell
-// pad on the right — comfortable for files of any realistic length.
-const gutterWidth = 6
+// defaultGutterWidth is the line-number column width for files up to 9999
+// lines: five digits plus a one-cell pad on the right, with the git
+// change-bar sitting in the blank cell at the far-left of the right-aligned
+// number. Larger files grow the gutter via gutterWidthFor so the marker
+// never overlaps the first digit.
+const defaultGutterWidth = 6
+
+// gutterWidthFor returns the line-number column width for a buffer of
+// lineCount lines. It keeps defaultGutterWidth for files that fit and grows
+// by one cell per extra digit so the git change-bar always has a blank
+// leading cell to sit in. Without this, a 10000-line file would render
+// "10000" as "▌0000" with the bar overwriting the first digit, because the
+// right-aligned number fills every cell the marker shares.
+func gutterWidthFor(lineCount int) int {
+	if lineCount <= 0 {
+		return defaultGutterWidth
+	}
+	if w := len(strconv.Itoa(lineCount)) + 2; w > defaultGutterWidth {
+		return w
+	}
+	return defaultGutterWidth
+}
+
+// GitLineChange describes the marker rendered in the editor gutter for a line.
+type GitLineChange int
+
+const (
+	GitLineNone GitLineChange = iota
+	GitLineModified
+	GitLineAdded
+	GitLineDeleted
+)
 
 // Tab is a single open file. It owns the on-disk path, the in-memory buffer,
 // the per-tab view state (scroll position, cursor, selection anchor), the
 // cached syntax-highlight styles, and a dirty flag.
 type Tab struct {
-	Path       string  // Empty for an unsaved/scratch tab.
+	Path       string // Empty for an unsaved/scratch tab.
 	Buffer     *Buffer
 	Cursor     Position // Where new typed text appears.
 	Anchor     Position // Selection anchor; equals Cursor when nothing is selected.
@@ -37,6 +66,16 @@ type Tab struct {
 	Dirty      bool
 	Styles     [][]tcell.Style
 	StyleStale bool
+	GitLines   map[int]GitLineChange
+
+	// lastHighlightScrollY / lastHighlightHeight record the viewport Render
+	// last tokenised for. Without them, every redraw (mouse moves included)
+	// would re-tokenise the visible rows even when nothing changed. Render
+	// recomputes only when the content changed (StyleStale) or the viewport
+	// shifted (scroll / height), since the grid is indexed by absolute line
+	// number and only carries the visible rows.
+	lastHighlightScrollY int
+	lastHighlightHeight  int
 
 	// Mtime is the file's modification time as of the last successful
 	// read or write. The app's periodic disk-reconcile loop compares it
@@ -474,7 +513,7 @@ func (t *Tab) SelectAll() {
 // caller passes the editor area's width and height because the Tab itself
 // doesn't know its render rect.
 func (t *Tab) EnsureVisible(viewW, viewH int) {
-	contentW := viewW - gutterWidth - 1
+	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -506,10 +545,6 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		t.renderImage(scr, th, x, y, w, h)
 		return
 	}
-	if t.StyleStale {
-		t.Styles = Highlight(t.Path, t.Buffer.String(), th)
-		t.StyleStale = false
-	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
 	// every render fights the user when they scroll with the wheel.
 	if t.cursorMoved {
@@ -517,6 +552,17 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		t.cursorMoved = false
 	}
 	t.clampScroll(h)
+	// Re-tokenise only when the content changed (StyleStale) or the viewport
+	// shifted (scroll / height). Otherwise every redraw, including mouse
+	// moves, would re-tokenise the visible rows for nothing. The grid is
+	// indexed by absolute line number and only carries the visible rows, so
+	// a scroll change means different rows must be filled.
+	if t.StyleStale || t.ScrollY != t.lastHighlightScrollY || h != t.lastHighlightHeight {
+		t.Styles = HighlightVisible(t.Path, t.Buffer.Lines, t.ScrollY, h, th)
+		t.StyleStale = false
+		t.lastHighlightScrollY = t.ScrollY
+		t.lastHighlightHeight = h
+	}
 
 	bg := th.BG
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text)
@@ -532,8 +578,9 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	selStart, selEnd := PosOrdered(t.Anchor, t.Cursor)
 	hasSel := t.HasSelection()
 
-	contentX := x + gutterWidth + 1
-	contentW := w - gutterWidth - 1
+	gw := gutterWidthFor(t.Buffer.LineCount())
+	contentX := x + gw + 1
+	contentW := w - gw - 1
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -560,12 +607,18 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 
 		// Gutter / line number, right-aligned with one trailing space.
-		numStr := fmt.Sprintf("%*d", gutterWidth-1, lineIdx+1)
+		numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
 		gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
 		if isCursorLine {
 			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
 		}
+		if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
+			scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
+		}
 		for i, r := range numStr {
+			if i == 0 && t.GitLines[lineIdx] != GitLineNone {
+				continue
+			}
 			scr.SetContent(x+i, cy, r, nil, gutterStyle)
 		}
 
@@ -659,13 +712,32 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	}
 }
 
+// gitLineMarkerRune returns the gutter glyph for a git line change.
+func gitLineMarkerRune(change GitLineChange) rune {
+	if change == GitLineDeleted {
+		return '▁'
+	}
+	return '▌'
+}
+
+// gitLineMarkerColor returns the gutter color for a git line change.
+func gitLineMarkerColor(th theme.Theme, change GitLineChange) tcell.Color {
+	if change == GitLineAdded {
+		return th.GitAdded
+	}
+	if change == GitLineDeleted {
+		return th.GitDeleted
+	}
+	return th.GitModified
+}
+
 // HitTest converts screen coordinates within this tab's render area to a
 // buffer position. ok=false means the click was outside any line.
 func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
 	if localY < 0 || localY >= h {
 		return Position{}, false
 	}
-	contentX := gutterWidth + 1
+	contentX := gutterWidthFor(t.Buffer.LineCount()) + 1
 	line := t.ScrollY + localY
 	if line < 0 || line >= t.Buffer.LineCount() {
 		return Position{}, false

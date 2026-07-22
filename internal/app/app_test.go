@@ -1168,6 +1168,38 @@ func TestEditorPress_PlacesCaret(t *testing.T) {
 	}
 }
 
+// TestOpenGitHunkAt_OpensInfoOnMarker proves gutter markers are clickable.
+func TestOpenGitHunkAt_OpensInfoOnMarker(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(target, []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.GitLines = map[int]editor.GitLineChange{0: editor.GitLineModified}
+
+	if !a.openGitHunkAt(tab, 0, 0) {
+		t.Fatal("expected gutter marker click to be handled")
+	}
+	if !a.confirmOpen || !a.confirmInfo {
+		t.Fatal("expected git hunk click to open info modal")
+	}
+}
+
+// TestOpenGitHunkAt_IgnoresCleanGutter keeps normal cursor placement intact.
+func TestOpenGitHunkAt_IgnoresCleanGutter(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	if a.openGitHunkAt(tab, 0, 0) {
+		t.Fatal("clean gutter should not be handled as a git preview")
+	}
+}
+
 // TestEditorPress_DoubleClickSelectsWord triggers the word-select path.
 func TestEditorPress_DoubleClickSelectsWord(t *testing.T) {
 	dir := t.TempDir()
@@ -1248,6 +1280,23 @@ func TestHandleKey_MenuNavKeys(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyUp, 0))
 	if a.hoveredMenuRow != first {
 		t.Fatalf("Up should return to %d, got %d", first, a.hoveredMenuRow)
+	}
+}
+
+// TestHandleKey_MenuShortcutAfterNavigation keeps menu shortcut letters live
+// after arrow-key navigation has moved the highlighted row.
+func TestHandleKey_MenuShortcutAfterNavigation(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.openMenu()
+
+	a.handleKey(keyEv(tcell.KeyDown, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'p'))
+
+	if a.menuOpen {
+		t.Fatal("Esc-p from the open menu should close the menu")
+	}
+	if !a.finderOpen {
+		t.Fatal("Esc-p from the open menu should open the project finder")
 	}
 }
 
@@ -1653,6 +1702,93 @@ func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
 	}
 }
 
+// TestMenuLayout_Shortcuts pins the right-side hint text shown in the action
+// menu to the Esc-leader bindings that are meant to be discoverable there.
+func TestMenuLayout_Shortcuts(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	want := map[string]string{
+		"Save":                 "Esc s",
+		"Save & close tab":     "",
+		"Close tab":            "Esc w",
+		"Undo":                 "Esc u",
+		"Redo":                 "Esc r",
+		"Revert file":          "",
+		"Find in file":         "Esc f",
+		"Find file in project": "Esc p",
+		"New file":             "Esc n",
+		"Rename file":          "",
+		"Delete file":          "",
+		"Copy relative path":   "",
+		"Copy absolute path":   "",
+		"Copy selection":       "",
+		"Cut selection":        "",
+		"Paste":                "",
+		"Toggle line comment":  "Esc /",
+		"Hide file explorer":   "Esc t",
+		"Quit editor":          "Esc q",
+	}
+
+	items, _, _ := a.menuLayout()
+	seen := make(map[string]string, len(items))
+	for _, item := range items {
+		label := item.label
+		if item.labelFor != nil {
+			label = item.labelFor(a)
+		}
+		seen[label] = item.shortcut
+	}
+	for label, shortcut := range want {
+		if got, ok := seen[label]; !ok {
+			t.Errorf("menu item %q not found", label)
+		} else if got != shortcut {
+			t.Errorf("%s shortcut = %q, want %q", label, got, shortcut)
+		}
+	}
+}
+
+// TestDrawMenu_RightAlignsShortcuts verifies the shortcut column is painted at
+// the modal's right edge instead of being appended to the command label.
+func TestDrawMenu_RightAlignsShortcuts(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.drawMenu()
+	a.screen.Show()
+
+	mx, my, mw, _ := a.menuModalRect()
+	save := menuItemByLabel(t, a, "Save")
+	shortcutX := mx + mw - 2 - runeLen(save.shortcut)
+	line := screenLine(a.screen.(tcell.SimulationScreen), my+save.relY)
+	lineRunes := []rune(line)
+	if got := string(lineRunes[shortcutX : shortcutX+runeLen(save.shortcut)]); got != save.shortcut {
+		t.Fatalf("right shortcut = %q, want %q on line %q", got, save.shortcut, line)
+	}
+	if strings.Contains(string(lineRunes[mx+4:shortcutX-1]), save.shortcut) {
+		t.Fatalf("shortcut should not be appended to label area: %q", line)
+	}
+}
+
+// TestTrimRunes covers the menu-label clipping helper so long dynamic labels
+// cannot overwrite the right-aligned shortcut column.
+func TestTrimRunes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{"fits", "Save", 8, "Save"},
+		{"clips", "Find file in project", 10, "Find file…"},
+		{"one", "Save", 1, "…"},
+		{"none", "Save", 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := trimRunes(tt.in, tt.max); got != tt.want {
+				t.Fatalf("trimRunes(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
+			}
+		})
+	}
+}
+
 // menuItemByLabel finds a menu row by static label for tests that care about
 // one action without hard-coding its row index.
 func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
@@ -1665,6 +1801,21 @@ func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
 	}
 	t.Fatalf("menu item %q not found", label)
 	return menuItemDef{}
+}
+
+// screenLine returns one row from a SimulationScreen as a fixed-width string.
+func screenLine(scr tcell.SimulationScreen, y int) string {
+	cells, w, _ := scr.GetContents()
+	rs := make([]rune, w)
+	for x := 0; x < w; x++ {
+		c := cells[y*w+x]
+		if len(c.Runes) == 0 {
+			rs[x] = ' '
+			continue
+		}
+		rs[x] = c.Runes[0]
+	}
+	return string(rs)
 }
 
 // TestMenuLayout_WithCustomActions checks the splice-before-Quit

@@ -156,6 +156,7 @@ type clickRecord struct {
 type menuItemDef struct {
 	label    string
 	relY     int
+	shortcut string
 	action   func(*App)
 	enabled  func(*App) bool
 	labelFor func(*App) string
@@ -180,24 +181,24 @@ func builtinMenuGroups() [][]menuItemDef {
 	return [][]menuItemDef{
 		// Tab actions
 		{
-			{label: "Save", action: (*App).menuSave, enabled: (*App).hasSavableTab},
+			{label: "Save", shortcut: "Esc s", action: (*App).menuSave, enabled: (*App).hasSavableTab},
 			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
-			{label: "Close tab", action: (*App).menuClose, enabled: (*App).hasTab},
+			{label: "Close tab", shortcut: "Esc w", action: (*App).menuClose, enabled: (*App).hasTab},
 		},
 		// History
 		{
-			{label: "Undo", action: (*App).menuUndo, enabled: (*App).hasUndo},
-			{label: "Redo", action: (*App).menuRedo, enabled: (*App).hasRedo},
+			{label: "Undo", shortcut: "Esc u", action: (*App).menuUndo, enabled: (*App).hasUndo},
+			{label: "Redo", shortcut: "Esc r", action: (*App).menuRedo, enabled: (*App).hasRedo},
 			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
 		// Search
 		{
-			{label: "Find in file", action: (*App).menuFind, enabled: (*App).hasFindable},
-			{label: "Find file in project", action: (*App).menuFindFile, enabled: (*App).hasFinder},
+			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
+			{label: "Find file in project", shortcut: "Esc p", action: (*App).menuFindFile, enabled: (*App).hasFinder},
 		},
 		// File actions
 		{
-			{action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
+			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
 			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
 			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
 			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
@@ -210,15 +211,15 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
 			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
-			{label: "Toggle line comment", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
+			{label: "Toggle line comment", shortcut: "Esc /", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
 		{
-			{action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
+			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
 		},
 		// Quit
 		{
-			{label: "Quit editor", action: (*App).menuQuit, enabled: alwaysTrue},
+			{label: "Quit editor", shortcut: "Esc q", action: (*App).menuQuit, enabled: alwaysTrue},
 		},
 	}
 }
@@ -384,6 +385,7 @@ type App struct {
 	// scp / ssh diagnostics that naturally wrap.
 	confirmInfo         bool
 	confirmMessageLines []string
+	confirmInfoScroll   int
 
 	// Save/Discard/Cancel modal — used when closing a dirty tab or
 	// quitting with unsaved changes. dirtyHover indexes the button row:
@@ -632,11 +634,24 @@ func (a *App) refreshGitStatus() {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
+		a.refreshGitLineChanges()
 		return
 	}
-	a.tree.DirtyFiles = st.DirtyFiles
-	a.tree.DirtyFolders = dirtyFolderSet(st.DirtyFiles, a.rootDir)
+	dirtyFiles := rebaseGitPaths(st.DirtyFiles, a.tree.Root.Path)
+	a.tree.DirtyFiles = dirtyFiles
+	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = st.Branch
+	a.refreshGitLineChanges()
+}
+
+// refreshGitLineChanges refreshes gutter markers for every open text tab.
+func (a *App) refreshGitLineChanges() {
+	for _, tab := range a.tabs {
+		if tab == nil || tab.Path == "" || tab.IsImage() {
+			continue
+		}
+		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
+	}
 }
 
 // startTreeRefresh launches a goroutine that posts a treeRefreshEvent every
@@ -1040,6 +1055,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// editing keys are blocked, but Down/Up move the highlight and Enter
 	// activates the highlighted row.
 	if a.menuOpen {
+		if ev.Key() == tcell.KeyRune {
+			if action := leaderActionFor(ev.Rune()); action != nil {
+				a.lastEscape = time.Time{}
+				action(a)
+				return
+			}
+		}
 		switch ev.Key() {
 		case tcell.KeyDown:
 			a.menuMoveSelection(1)
@@ -1350,6 +1372,9 @@ func (a *App) sidebarClick(x, y int) {
 // mirrors it onto the file tree so the matching row renders with the
 // "active" highlight. All writes to a.activeFolder go through here.
 func (a *App) setActiveFolder(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	a.activeFolder = path
 	if a.tree != nil {
 		a.tree.ActiveFolder = path
@@ -1372,9 +1397,23 @@ func (a *App) tabBarClick(x, _ int) {
 				return
 			}
 			a.activeTab = r.Index
+			a.syncActiveTreeFile()
 			return
 		}
 	}
+}
+
+// syncActiveTreeFile mirrors the active tab path into the file tree.
+func (a *App) syncActiveTreeFile() {
+	if a.tree == nil {
+		return
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		a.tree.ActiveFile = ""
+		return
+	}
+	a.tree.ActiveFile = tab.Path
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
@@ -1386,6 +1425,9 @@ func (a *App) editorPress(x, y int) {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
+	if a.openGitHunkAt(tab, x-ex, y-ey) {
+		return
+	}
 	pos, ok := tab.HitTest(x-ex, y-ey, ew, eh)
 	if !ok {
 		return
@@ -1399,6 +1441,24 @@ func (a *App) editorPress(x, y int) {
 	}
 	a.lastClick = clickRecord{x: x, y: y, when: now}
 	tab.MoveCursorTo(pos, false)
+}
+
+// openGitHunkAt opens a diff preview when the user clicks a gutter marker.
+func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
+	if localX != 0 || localY < 0 {
+		return false
+	}
+	line := tab.ScrollY + localY
+	if tab.GitLines[line] == editor.GitLineNone {
+		return false
+	}
+	lines := loadGitHunkPreview(a.rootDir, tab.Path, line)
+	if len(lines) == 0 {
+		a.openInfo("Git change", []string{"No git diff found for this line."})
+		return true
+	}
+	a.openInfo("Git change · "+filepath.Base(tab.Path), lines)
+	return true
 }
 
 // editorDrag extends the selection during a click-drag inside the editor.
@@ -1591,10 +1651,30 @@ func (a *App) OpenFile(path string) { a.openFile(path) }
 // Whatever the path resolves to, its parent becomes the active folder so
 // the next New File from the main menu lands next to it.
 func (a *App) openFile(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	a.setActiveFolder(filepath.Dir(path))
+	if a.tree != nil {
+		a.tree.ActiveFile = path
+		// Reveal the file's location in the sidebar: expand every ancestor
+		// directory and scroll the row into view. Without this, opening a
+		// file via the finder (Esc-p) or the command line leaves the tree
+		// collapsed at the top, so the active-file highlight is set on a
+		// row nobody can see. listH mirrors Render's own list-area height
+		// (sidebarH - 2) so the "already visible" guard inside Reveal uses
+		// the same viewport the next paint will.
+		_, _, _, sh := a.sidebarRect()
+		listH := sh - 2
+		if listH < 0 {
+			listH = 0
+		}
+		a.tree.Reveal(path, listH)
+	}
 	for i, t := range a.tabs {
 		if t.Path == path {
 			a.activeTab = i
+			t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 			return
 		}
 	}
@@ -1605,6 +1685,7 @@ func (a *App) openFile(path string) {
 	}
 	a.tabs = append(a.tabs, t)
 	a.activeTab = len(a.tabs) - 1
+	t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 	a.flash(fmt.Sprintf("Opened %s", filepath.Base(path)))
 }
 
@@ -1716,6 +1797,7 @@ func (a *App) closeTab(idx int) {
 	if a.activeTab < 0 {
 		a.activeTab = 0
 	}
+	a.syncActiveTreeFile()
 }
 
 // copySelection puts the active tab's selection on the system clipboard
@@ -2545,7 +2627,7 @@ func (a *App) drawMenu() {
 		enabled := item.enabled(a)
 		hovered := enabled && i == a.hoveredMenuRow
 
-		var labelStyle, chevStyle tcell.Style
+		var labelStyle, chevStyle, shortcutStyle tcell.Style
 		switch {
 		case hovered:
 			// Paint the row's interior with the hover background first.
@@ -2554,12 +2636,15 @@ func (a *App) drawMenu() {
 			}
 			labelStyle = hoverStyle
 			chevStyle = hoverChevStyle
+			shortcutStyle = tcell.StyleDefault.Background(hoverBg).Foreground(a.theme.Muted).Bold(true)
 		case enabled:
 			labelStyle = bgStyle
 			chevStyle = chevronStyle
+			shortcutStyle = mutedStyle
 		default:
 			labelStyle = mutedStyle
 			chevStyle = mutedStyle
+			shortcutStyle = mutedStyle
 		}
 		// Dynamic label (e.g. the file-explorer toggle row) takes precedence
 		// over the static one when present.
@@ -2568,7 +2653,14 @@ func (a *App) drawMenu() {
 			label = item.labelFor(a)
 		}
 		drawAt(a.screen, mx+2, cy, "▸", chevStyle)
+		if item.shortcut == "" {
+			drawAt(a.screen, mx+4, cy, label, labelStyle)
+			continue
+		}
+		shortcutX := mx + mw - 2 - runeLen(item.shortcut)
+		label = trimRunes(label, shortcutX-(mx+4)-2)
 		drawAt(a.screen, mx+4, cy, label, labelStyle)
+		drawAt(a.screen, shortcutX, cy, item.shortcut, shortcutStyle)
 	}
 
 	a.screen.HideCursor()
@@ -2595,6 +2687,22 @@ func drawAt(scr tcell.Screen, x, y int, s string, st tcell.Style) {
 		scr.SetContent(x+col, y, r, nil, st)
 		col++
 	}
+}
+
+// trimRunes shortens s to max visible cells, reserving the final cell for an
+// ellipsis when truncation is needed.
+func trimRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if runeLen(s) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	rs := []rune(s)
+	return string(rs[:max-1]) + "…"
 }
 
 // detectLangLabel returns a short label for the active file's language —
