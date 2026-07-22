@@ -351,6 +351,7 @@ type App struct {
 	// scp / ssh diagnostics that naturally wrap.
 	confirmInfo         bool
 	confirmMessageLines []string
+	confirmInfoScroll   int
 
 	// Save/Discard/Cancel modal — used when closing a dirty tab or
 	// quitting with unsaved changes. dirtyHover indexes the button row:
@@ -540,11 +541,24 @@ func (a *App) refreshGitStatus() {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
+		a.refreshGitLineChanges()
 		return
 	}
-	a.tree.DirtyFiles = st.DirtyFiles
-	a.tree.DirtyFolders = dirtyFolderSet(st.DirtyFiles, a.rootDir)
+	dirtyFiles := rebaseGitPaths(st.DirtyFiles, a.tree.Root.Path)
+	a.tree.DirtyFiles = dirtyFiles
+	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = st.Branch
+	a.refreshGitLineChanges()
+}
+
+// refreshGitLineChanges refreshes gutter markers for every open text tab.
+func (a *App) refreshGitLineChanges() {
+	for _, tab := range a.tabs {
+		if tab == nil || tab.Path == "" || tab.IsImage() {
+			continue
+		}
+		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
+	}
 }
 
 // startTreeRefresh launches a goroutine that posts a treeRefreshEvent every
@@ -1265,6 +1279,9 @@ func (a *App) sidebarClick(x, y int) {
 // mirrors it onto the file tree so the matching row renders with the
 // "active" highlight. All writes to a.activeFolder go through here.
 func (a *App) setActiveFolder(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	a.activeFolder = path
 	if a.tree != nil {
 		a.tree.ActiveFolder = path
@@ -1287,9 +1304,23 @@ func (a *App) tabBarClick(x, _ int) {
 				return
 			}
 			a.activeTab = r.Index
+			a.syncActiveTreeFile()
 			return
 		}
 	}
+}
+
+// syncActiveTreeFile mirrors the active tab path into the file tree.
+func (a *App) syncActiveTreeFile() {
+	if a.tree == nil {
+		return
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		a.tree.ActiveFile = ""
+		return
+	}
+	a.tree.ActiveFile = tab.Path
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
@@ -1301,6 +1332,9 @@ func (a *App) editorPress(x, y int) {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
+	if a.openGitHunkAt(tab, x-ex, y-ey) {
+		return
+	}
 	pos, ok := tab.HitTest(x-ex, y-ey, ew, eh)
 	if !ok {
 		return
@@ -1314,6 +1348,24 @@ func (a *App) editorPress(x, y int) {
 	}
 	a.lastClick = clickRecord{x: x, y: y, when: now}
 	tab.MoveCursorTo(pos, false)
+}
+
+// openGitHunkAt opens a diff preview when the user clicks a gutter marker.
+func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
+	if localX != 0 || localY < 0 {
+		return false
+	}
+	line := tab.ScrollY + localY
+	if tab.GitLines[line] == editor.GitLineNone {
+		return false
+	}
+	lines := loadGitHunkPreview(a.rootDir, tab.Path, line)
+	if len(lines) == 0 {
+		a.openInfo("Git change", []string{"No git diff found for this line."})
+		return true
+	}
+	a.openInfo("Git change · "+filepath.Base(tab.Path), lines)
+	return true
 }
 
 // editorDrag extends the selection during a click-drag inside the editor.
@@ -1506,10 +1558,30 @@ func (a *App) OpenFile(path string) { a.openFile(path) }
 // Whatever the path resolves to, its parent becomes the active folder so
 // the next New File from the main menu lands next to it.
 func (a *App) openFile(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	a.setActiveFolder(filepath.Dir(path))
+	if a.tree != nil {
+		a.tree.ActiveFile = path
+		// Reveal the file's location in the sidebar: expand every ancestor
+		// directory and scroll the row into view. Without this, opening a
+		// file via the finder (Esc-p) or the command line leaves the tree
+		// collapsed at the top, so the active-file highlight is set on a
+		// row nobody can see. listH mirrors Render's own list-area height
+		// (sidebarH - 2) so the "already visible" guard inside Reveal uses
+		// the same viewport the next paint will.
+		_, _, _, sh := a.sidebarRect()
+		listH := sh - 2
+		if listH < 0 {
+			listH = 0
+		}
+		a.tree.Reveal(path, listH)
+	}
 	for i, t := range a.tabs {
 		if t.Path == path {
 			a.activeTab = i
+			t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 			return
 		}
 	}
@@ -1520,6 +1592,7 @@ func (a *App) openFile(path string) {
 	}
 	a.tabs = append(a.tabs, t)
 	a.activeTab = len(a.tabs) - 1
+	t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 	a.flash(fmt.Sprintf("Opened %s", filepath.Base(path)))
 }
 
@@ -1631,6 +1704,7 @@ func (a *App) closeTab(idx int) {
 	if a.activeTab < 0 {
 		a.activeTab = 0
 	}
+	a.syncActiveTreeFile()
 }
 
 // copySelection puts the active tab's selection on the system clipboard

@@ -1168,6 +1168,38 @@ func TestEditorPress_PlacesCaret(t *testing.T) {
 	}
 }
 
+// TestOpenGitHunkAt_OpensInfoOnMarker proves gutter markers are clickable.
+func TestOpenGitHunkAt_OpensInfoOnMarker(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(target, []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.GitLines = map[int]editor.GitLineChange{0: editor.GitLineModified}
+
+	if !a.openGitHunkAt(tab, 0, 0) {
+		t.Fatal("expected gutter marker click to be handled")
+	}
+	if !a.confirmOpen || !a.confirmInfo {
+		t.Fatal("expected git hunk click to open info modal")
+	}
+}
+
+// TestOpenGitHunkAt_IgnoresCleanGutter keeps normal cursor placement intact.
+func TestOpenGitHunkAt_IgnoresCleanGutter(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab, err := editor.NewTab("")
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	if a.openGitHunkAt(tab, 0, 0) {
+		t.Fatal("clean gutter should not be handled as a git preview")
+	}
+}
+
 // TestEditorPress_DoubleClickSelectsWord triggers the word-select path.
 func TestEditorPress_DoubleClickSelectsWord(t *testing.T) {
 	dir := t.TempDir()

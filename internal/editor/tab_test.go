@@ -16,6 +16,7 @@ package editor
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -694,7 +695,7 @@ func TestTab_Render_DrawsLineNumbersAndContent(t *testing.T) {
 	if cy != 0 {
 		t.Errorf("cursor row = %d, want 0", cy)
 	}
-	if cx < gutterWidth {
+	if cx < defaultGutterWidth {
 		t.Errorf("cursor col %d should be past the gutter", cx)
 	}
 }
@@ -716,7 +717,7 @@ func TestTab_Render_HighlightsSelection(t *testing.T) {
 	if !vis {
 		t.Fatal("cursor hidden")
 	}
-	wantCx := gutterWidth + 1 + 5
+	wantCx := defaultGutterWidth + 1 + 5
 	if cx != wantCx {
 		t.Errorf("cursor x = %d, want %d", cx, wantCx)
 	}
@@ -748,7 +749,7 @@ func TestTab_HitTest_ContentClick(t *testing.T) {
 	tab, _ := NewTab("")
 	tab.Buffer = NewBuffer("hello\nworld")
 
-	pos, ok := tab.HitTest(gutterWidth+1+2, 1, 40, 10)
+	pos, ok := tab.HitTest(defaultGutterWidth+1+2, 1, 40, 10)
 	if !ok {
 		t.Fatal("expected ok")
 	}
@@ -797,7 +798,7 @@ func TestTab_HitTest_ClampsColumnAtLineEnd(t *testing.T) {
 	tab, _ := NewTab("")
 	tab.Buffer = NewBuffer("ab")
 
-	pos, ok := tab.HitTest(gutterWidth+1+50, 0, 80, 10)
+	pos, ok := tab.HitTest(defaultGutterWidth+1+50, 0, 80, 10)
 	if !ok {
 		t.Fatal("expected ok")
 	}
@@ -830,9 +831,9 @@ func TestTab_Render_ExpandsTabsToTabStops(t *testing.T) {
 		}
 		return c.Runes[0]
 	}
-	// Content starts at col gutterWidth+1. The tab fills 4 cells, so
+	// Content starts at col defaultGutterWidth+1. The tab fills 4 cells, so
 	// 'a' lands at content+4, 'b' at +5, 'c' at +6.
-	contentCol := gutterWidth + 1
+	contentCol := defaultGutterWidth + 1
 	if w < contentCol+7 {
 		t.Fatalf("simulated screen too narrow: w=%d", w)
 	}
@@ -855,7 +856,7 @@ func TestTab_HitTest_InsideTabSnapsToTab(t *testing.T) {
 	tab, _ := NewTab("")
 	tab.Buffer = NewBuffer("\tx")
 
-	contentX := gutterWidth + 1
+	contentX := defaultGutterWidth + 1
 	for offset := 0; offset < 4; offset++ {
 		pos, ok := tab.HitTest(contentX+offset, 0, 40, 10)
 		if !ok {
@@ -933,7 +934,7 @@ func TestTab_Render_OverflowIndicator_Right(t *testing.T) {
 	defer scr.Fini()
 
 	tab, _ := NewTab("")
-	// 30 chars on one line; viewport content width = 20 - gutterWidth - 1 = 13.
+	// 30 chars on one line; viewport content width = 20 - defaultGutterWidth - 1 = 13.
 	tab.Buffer = NewBuffer(strings.Repeat("x", 30))
 	tab.Cursor = Position{Line: 0, Col: 0}
 	tab.Anchor = tab.Cursor
@@ -966,10 +967,10 @@ func TestTab_Render_OverflowIndicator_Left(t *testing.T) {
 	scr.Show()
 
 	cells, w, _ := scr.GetContents()
-	// First content cell is at column gutterWidth + 1.
-	left := cells[gutterWidth+1]
+	// First content cell is at column defaultGutterWidth + 1.
+	left := cells[defaultGutterWidth+1]
 	if len(left.Runes) == 0 || left.Runes[0] != '‹' {
-		t.Fatalf("expected '‹' at row 0 col %d, got %q", gutterWidth+1, string(left.Runes))
+		t.Fatalf("expected '‹' at row 0 col %d, got %q", defaultGutterWidth+1, string(left.Runes))
 	}
 	_ = w
 }
@@ -993,6 +994,127 @@ func TestTab_Render_NoOverflowIndicator_WhenLineFits(t *testing.T) {
 	for i := 0; i < w; i++ {
 		if len(cells[i].Runes) > 0 && (cells[i].Runes[0] == '›' || cells[i].Runes[0] == '‹') {
 			t.Fatalf("unexpected overflow glyph at col %d", i)
+		}
+	}
+}
+
+// TestGutterWidthFor pins the dynamic gutter width: files up to 9999 lines
+// keep the default six-cell gutter, and each extra digit grows it by one so
+// the git change-bar always has a blank leading cell to sit in.
+func TestGutterWidthFor(t *testing.T) {
+	cases := []struct {
+		lines int
+		want  int
+	}{
+		{0, 6}, {1, 6}, {999, 6}, {9999, 6},
+		{10000, 7}, {99999, 7}, {100000, 8},
+	}
+	for _, c := range cases {
+		if got := gutterWidthFor(c.lines); got != c.want {
+			t.Errorf("gutterWidthFor(%d) = %d, want %d", c.lines, got, c.want)
+		}
+	}
+}
+
+// TestTab_RenderSkipsHighlightWhenNotStale confirms Render only re-tokenises
+// the visible rows when something actually changed. Without this gate every
+// redraw, including mouse moves, would re-tokenise for nothing, and the
+// StyleStale flag set by every edit would be written but never read. We
+// detect recompute by comparing the styles grid's backing array: a fresh
+// make per recompute vs. reuse on skip.
+func TestTab_RenderSkipsHighlightWhenNotStale(t *testing.T) {
+	scr := newSimScreen(t, 40, 10)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("package main\nfunc main() {}\n")
+	tab.StyleStale = true
+
+	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
+	if tab.Styles == nil {
+		t.Fatal("expected first render to highlight")
+	}
+	firstPtr := reflect.ValueOf(tab.Styles).Pointer()
+
+	// Second render with no content, scroll, or height change: should reuse
+	// the existing styles grid instead of re-tokenising.
+	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
+	if reflect.ValueOf(tab.Styles).Pointer() != firstPtr {
+		t.Fatal("expected Render to skip re-highlight when nothing changed")
+	}
+
+	// An edit marks styles stale, so the next render must recompute.
+	tab.StyleStale = true
+	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
+	if reflect.ValueOf(tab.Styles).Pointer() == firstPtr {
+		t.Fatal("expected Render to re-highlight after StyleStale set")
+	}
+}
+
+// TestTab_RenderRecomputesHighlightOnScroll confirms Render re-tokenises
+// when the viewport scrolls. The highlight grid is indexed by absolute line
+// number and only carries the visible rows, so a scroll change means
+// different rows must be filled even when the content is unchanged.
+func TestTab_RenderRecomputesHighlightOnScroll(t *testing.T) {
+	scr := newSimScreen(t, 40, 10)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer(strings.Repeat("package main\n", 50))
+	tab.StyleStale = true
+
+	tab.Render(scr, theme.Default(), 0, 0, 40, 10) // ScrollY clamps to 0
+	if tab.Styles == nil {
+		t.Fatal("expected first render to highlight")
+	}
+	firstPtr := reflect.ValueOf(tab.Styles).Pointer()
+
+	// Scroll without moving the cursor (cursorMoved=false so EnsureVisible
+	// doesn't snap ScrollY back). The visible rows changed, so Render must
+	// re-tokenise even though StyleStale is false.
+	tab.ScrollY = 20
+	tab.cursorMoved = false
+	tab.Render(scr, theme.Default(), 0, 0, 40, 10)
+	if reflect.ValueOf(tab.Styles).Pointer() == firstPtr {
+		t.Fatal("expected Render to re-highlight after scroll")
+	}
+}
+
+// TestTab_Render_GitMarkerDoesNotOverlapLineNumber is the regression test for
+// the change-bar covering a line-number digit on files past 10000 lines.
+// Before the dynamic gutter, "10000" rendered as "▌0000" with the bar
+// overwriting the first digit. The gutter now grows by one cell per extra
+// digit so the marker always sits in a blank leading cell.
+func TestTab_Render_GitMarkerDoesNotOverlapLineNumber(t *testing.T) {
+	const w = 60
+	scr := newSimScreen(t, w, 10)
+	defer scr.Fini()
+
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer(strings.Repeat("x\n", 9999) + "x") // exactly 10000 lines
+	tab.GitLines = map[int]GitLineChange{9999: GitLineModified}
+	tab.ScrollY = 9990 // line 9999 (display 10000) lands on the last visible row
+	tab.cursorMoved = false
+
+	tab.Render(scr, theme.Default(), 0, 0, w, 10)
+	scr.Show()
+
+	cells, _, _ := scr.GetContents()
+	const row = 9 // last visible row -> line 9999
+	cellRune := func(col int) rune {
+		c := cells[row*w+col]
+		if len(c.Runes) == 0 {
+			return ' '
+		}
+		return c.Runes[0]
+	}
+	if got := cellRune(0); got != '▌' {
+		t.Errorf("expected git marker at col 0, got %q", got)
+	}
+	want := "10000"
+	for i, r := range want {
+		if got := cellRune(1 + i); got != r {
+			t.Errorf("col %d: got %q, want %q", 1+i, got, string(r))
 		}
 	}
 }
