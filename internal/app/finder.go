@@ -56,6 +56,15 @@ func (e *finderRebuiltEvent) When() time.Time { return e.when }
 // (Building when the index is already StateReady is a no-op
 // inside the orchestrator's coalesce gate.)
 func (a *App) openFinder() {
+	// Single-file mode has no project index — the menu row is already
+	// hidden (hasTree), but the Esc-p leader reaches here directly, so
+	// guard it too rather than pop an always-empty modal. tree == nil is
+	// the single-file signal (see NewSingleFile); the finder is a
+	// project-scoped feature that's omitted alongside the tree.
+	if a.tree == nil {
+		a.flash("Find file isn't available in single-file mode")
+		return
+	}
 	a.closeAllModals()
 	a.finderOpen = true
 	a.finderQuery = nil

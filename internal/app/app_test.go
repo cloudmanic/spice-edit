@@ -2291,6 +2291,59 @@ func containsSidebarToggle(items []menuItemDef, a *App) bool {
 	return false
 }
 
+// TestMenuToggleSidebar_NoPanicInSingleFileMode is a regression guard for
+// a crash: the Esc-t leader calls menuToggleSidebar directly, bypassing the
+// menu row's hasTree gate. In single-file mode (tree == nil) flipping
+// sidebarShown true would send draw() into a.tree.Render on a nil tree and
+// panic. The toggle must stay a no-op so the sidebar can't be shown when
+// there's no tree behind it.
+func TestMenuToggleSidebar_NoPanicInSingleFileMode(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree = nil // single-file mode
+	a.sidebarShown = false
+
+	a.menuToggleSidebar() // simulates the Esc-t leader
+
+	if a.sidebarShown {
+		t.Fatal("sidebar must stay hidden in single-file mode — no tree to render")
+	}
+	a.draw() // would panic on nil a.tree.Render if the toggle flipped it on
+}
+
+// TestRefreshGitStatus_RefreshesGutterInSingleFileMode pins the
+// single-file-mode fix: with no file tree, refreshGitStatus must still
+// reload the open tab's per-line gutter markers (a file-scoped git diff
+// that doesn't need the tree). Without this, saving a file in
+// single-file mode — which routes through refreshGitStatus — would
+// leave the gutter markers frozen at their open-time state.
+func TestRefreshGitStatus_RefreshesGutterInSingleFileMode(t *testing.T) {
+	requireGit(t)
+	repo := initRepo(t)
+	target := filepath.Join(repo, "f.go")
+	writeFileT(t, target, "package main\n\nfunc main() {}\n")
+	gitRun(t, repo, "add", "f.go")
+	gitRun(t, repo, "commit", "-m", "init")
+
+	a := newTestApp(t, repo)
+	a.tree = nil // simulate single-file mode
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	if tab == nil {
+		t.Fatal("expected an open tab")
+	}
+
+	// Clean file → no markers yet. Now dirty the worktree and clear the
+	// tab's cached markers so we can prove refreshGitStatus repopulates
+	// them despite tree == nil.
+	writeFileT(t, target, "package main\n\nfunc main() { println(1) }\n")
+	tab.GitLines = nil
+	a.refreshGitStatus()
+
+	if len(tab.GitLines) == 0 {
+		t.Fatal("expected gutter markers to be refreshed in single-file mode, got none")
+	}
+}
+
 // TestDrawTabBar_NoIconWhenDisabled is the inverse of the above —
 // flipping IconsEnabled off must remove the glyph from the tab bar
 // (so terminals without a Nerd Font don't see tofu boxes in tabs).

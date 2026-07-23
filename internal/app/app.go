@@ -571,6 +571,9 @@ func NewSingleFile(filePath string) (*App, error) {
 	a.setActiveFolder(rootDir)
 	a.loadSpiceConfig()
 	a.loadCustomActions()
+	// openFile loads the file's git gutter markers itself (a file-scoped
+	// `git diff`), so single-file mode shows change bars on open without
+	// the whole-repo status or tree walk that New performs.
 	a.openFile(filePath)
 	return a, nil
 }
@@ -627,6 +630,12 @@ func (a *App) refreshTree() {
 // maps empty, which the renderer treats as "everything clean".
 func (a *App) refreshGitStatus() {
 	if a.tree == nil {
+		// Single-file mode has no tree to stamp dirty-path sets onto,
+		// but the open tab can still show per-line gutter markers —
+		// those come from a single `git diff` on the file itself and
+		// don't need the (deliberately skipped) directory walk. Skip
+		// the whole-repo `git status` and just refresh the gutter.
+		a.refreshGitLineChanges()
 		return
 	}
 	st := loadGitStatus(a.rootDir)
@@ -2182,6 +2191,14 @@ func (a *App) menuRefreshTree() {
 // snap back when it returns.
 func (a *App) menuToggleSidebar() {
 	a.closeMenu()
+	// Single-file mode has no file tree, so there's nothing to show or
+	// hide. The menu row is hidden (hasTree), but the Esc-t leader reaches
+	// here directly — guard it so the toggle can't flip sidebarShown true
+	// and send draw() into a.tree.Render on a nil tree.
+	if a.tree == nil {
+		a.flash("No file explorer in single-file mode")
+		return
+	}
 	a.sidebarShown = !a.sidebarShown
 }
 

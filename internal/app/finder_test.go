@@ -328,3 +328,23 @@ func endsWith(s, suffix string) bool {
 	}
 	return s[len(s)-len(suffix):] == suffix
 }
+
+// TestOpenFinder_NoOpInSingleFileMode pins the single-file-mode guard: the
+// Esc-p leader reaches openFinder directly (unlike the menu row, which is
+// gated by hasTree), so in single-file mode (tree == nil) openFinder must
+// not pop an always-empty modal — it flashes an explanation and leaves
+// finderOpen false instead.
+func TestOpenFinder_NoOpInSingleFileMode(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree = nil   // single-file mode: no project tree...
+	a.finder = nil // ...and no project index
+
+	a.openFinder()
+
+	if a.finderOpen {
+		t.Fatal("openFinder should not open the modal when finder is nil")
+	}
+	if a.statusMsg == "" {
+		t.Fatal("expected a flash explaining the finder is unavailable")
+	}
+}
