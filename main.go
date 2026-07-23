@@ -131,16 +131,26 @@ func main() {
 		return
 	}
 
-	a, err := app.New(res.RootDir)
+	// Single-file mode: when the user invoked `spiceedit somefile.md`,
+	// skip building the file tree and project file index entirely.
+	// They asked for one file — don't pay the CPU to walk the
+	// surrounding directory just so we can render a sidebar they
+	// didn't ask for. The action-menu sidebar toggle is filtered out
+	// in this mode too; see (*App).hasTree.
+	var (
+		a   *app.App
+		err error
+	)
+	if res.OpenFile != "" {
+		a, err = app.NewSingleFile(res.OpenFile)
+	} else {
+		a, err = app.New(res.RootDir)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spiceedit: failed to start:", err)
 		os.Exit(1)
 	}
 	defer a.Close()
-
-	if res.OpenFile != "" {
-		a.OpenFile(res.OpenFile)
-	}
 
 	if err := a.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "spiceedit:", err)

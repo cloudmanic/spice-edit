@@ -160,6 +160,12 @@ type menuItemDef struct {
 	action   func(*App)
 	enabled  func(*App) bool
 	labelFor func(*App) string
+	// visible, when non-nil, decides whether the item appears in the
+	// menu at all (returning false drops the row entirely — not the
+	// same as enabled, which renders the row greyed out). Used to
+	// hide the sidebar toggle in single-file mode, where there's no
+	// tree to show or hide.
+	visible func(*App) bool
 }
 
 // builtinMenuGroups returns the editor's built-in action groups in
@@ -209,7 +215,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// View toggle
 		{
-			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel},
+			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
 		},
 		// Quit
 		{
@@ -257,6 +263,26 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 		groups = append(groups[:len(groups)-1], ca, quit)
 	}
 
+	// Drop items whose visibility predicate (if any) says they don't
+	// belong here right now — e.g. single-file mode hides the sidebar
+	// toggle because there's no tree to toggle. A group emptied by
+	// filtering vanishes too, so we don't leave a hanging divider
+	// between two surviving groups.
+	visibleGroups := make([][]menuItemDef, 0, len(groups))
+	for _, g := range groups {
+		kept := make([]menuItemDef, 0, len(g))
+		for _, it := range g {
+			if it.visible != nil && !it.visible(a) {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		if len(kept) > 0 {
+			visibleGroups = append(visibleGroups, kept)
+		}
+	}
+	groups = visibleGroups
+
 	// Title at relY 1, divider under it at relY 2, first item at relY 3.
 	dividers = []int{2}
 	y := 3
@@ -274,6 +300,14 @@ func (a *App) menuLayout() (items []menuItemDef, dividers []int, modalHeight int
 	// y now points at the bottom border row; height is one beyond.
 	modalHeight = y + 1
 	return items, dividers, modalHeight
+}
+
+// hasTree is the menu visibility predicate for tree-dependent rows.
+// True when the file tree was built at startup; false in single-file
+// mode, where we deliberately skipped tree construction to avoid
+// indexing the working directory.
+func (a *App) hasTree() bool {
+	return a.tree != nil
 }
 
 // App is the editor's top-level state holder and event-loop owner.
@@ -494,6 +528,56 @@ func New(rootDir string) (*App, error) {
 	return a, nil
 }
 
+// NewSingleFile is the lean alternative to New for the "spiceedit
+// somefile.md" invocation: no file tree, no project finder index,
+// no background tree-refresh goroutine, sidebar hidden. The user
+// asked for one file — we don't pay the cost of walking and watching
+// the surrounding directory tree just to render a file they wanted
+// to look at in isolation. The tree-toggle row in the action menu
+// is filtered out via the hasTree visibility predicate so the user
+// can't accidentally try to show a sidebar that doesn't exist.
+//
+// rootDir is still recorded (set to the file's parent) so file-level
+// actions that need a base directory — Save As, New File, the
+// relative/absolute path helpers — have somewhere to anchor.
+func NewSingleFile(filePath string) (*App, error) {
+	scr, err := tcell.NewScreen()
+	if err != nil {
+		return nil, err
+	}
+	if err := scr.Init(); err != nil {
+		return nil, err
+	}
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+
+	th := theme.Default()
+	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
+	scr.Clear()
+
+	rootDir := filepath.Dir(filePath)
+	if rootDir == "" {
+		rootDir = "."
+	}
+
+	a := &App{
+		screen:         scr,
+		theme:          th,
+		rootDir:        rootDir,
+		tree:           nil,
+		hoveredMenuRow: -1,
+		sidebarShown:   false,
+		sidebarWidth:   defaultSidebarWidth,
+	}
+	a.setActiveFolder(rootDir)
+	a.loadSpiceConfig()
+	a.loadCustomActions()
+	// openFile loads the file's git gutter markers itself (a file-scoped
+	// `git diff`), so single-file mode shows change bars on open without
+	// the whole-repo status or tree walk that New performs.
+	a.openFile(filePath)
+	return a, nil
+}
+
 // loadCustomActions reads the user's actions.json (if any) and stores
 // the parsed list on the App. Failures are surfaced as a status flash
 // so a typo in the config file isn't silently swallowed, but they
@@ -525,6 +609,18 @@ func (a *App) loadSpiceConfig() {
 	}
 }
 
+// refreshTree calls tree.Refresh when the file tree exists, and is a
+// no-op in single-file mode. File operations (create / rename / delete)
+// call this after touching the disk so callers don't have to nil-check
+// every site. The git-status and finder refreshes that usually
+// accompany it already guard themselves internally.
+func (a *App) refreshTree() {
+	if a.tree == nil {
+		return
+	}
+	a.tree.Refresh()
+}
+
 // refreshGitStatus re-runs `git status --porcelain` against the project
 // root and stamps the resulting dirty-paths sets onto the file tree, so
 // changed files render in the Modified color on the next draw. It's
@@ -534,6 +630,12 @@ func (a *App) loadSpiceConfig() {
 // maps empty, which the renderer treats as "everything clean".
 func (a *App) refreshGitStatus() {
 	if a.tree == nil {
+		// Single-file mode has no tree to stamp dirty-path sets onto,
+		// but the open tab can still show per-line gutter markers —
+		// those come from a single `git diff` on the file itself and
+		// don't need the (deliberately skipped) directory walk. Skip
+		// the whole-repo `git status` and just refresh the gutter.
+		a.refreshGitLineChanges()
 		return
 	}
 	st := loadGitStatus(a.rootDir)
@@ -656,7 +758,7 @@ func (a *App) handleEvent(ev tcell.Event) {
 // path so a Copy-from-remote action's output is visible immediately
 // instead of after the next tick.
 func (a *App) refreshTreeNow() {
-	a.tree.Refresh()
+	a.refreshTree()
 	a.reconcileOpenTabsWithDisk()
 	a.refreshGitStatus()
 	a.invalidateFinder()
@@ -2080,7 +2182,7 @@ func (a *App) menuToggleLineComment() {
 // requires uncommenting one line.
 func (a *App) menuRefreshTree() {
 	a.closeMenu()
-	a.tree.Refresh()
+	a.refreshTree()
 	a.flash("File tree refreshed")
 }
 
@@ -2089,6 +2191,14 @@ func (a *App) menuRefreshTree() {
 // snap back when it returns.
 func (a *App) menuToggleSidebar() {
 	a.closeMenu()
+	// Single-file mode has no file tree, so there's nothing to show or
+	// hide. The menu row is hidden (hasTree), but the Esc-t leader reaches
+	// here directly — guard it so the toggle can't flip sidebarShown true
+	// and send draw() into a.tree.Render on a nil tree.
+	if a.tree == nil {
+		a.flash("No file explorer in single-file mode")
+		return
+	}
 	a.sidebarShown = !a.sidebarShown
 }
 
