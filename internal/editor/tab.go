@@ -111,6 +111,11 @@ type Tab struct {
 	Image    image.Image // populated when Mode == imageMode
 	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
 
+	// Term is the live child shell, populated when Mode == terminalMode.
+	// See terminal.go — the tab owns it so closing the tab (or the app)
+	// tears the shell down with it.
+	Term *Terminal
+
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
 	// keystroke routing; the tab owns the query, the resolved match
@@ -200,7 +205,11 @@ func (t *Tab) IsImage() bool {
 }
 
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
+// Terminal tabs have no path, so they label themselves "terminal".
 func (t *Tab) DisplayName() string {
+	if t.IsTerminal() {
+		return "terminal"
+	}
 	if t.Path == "" {
 		return "untitled"
 	}
@@ -210,9 +219,12 @@ func (t *Tab) DisplayName() string {
 // Save writes the buffer to disk and clears Dirty. It is an error to call
 // Save on an untitled tab — callers should prompt for a path first. Mtime
 // is refreshed so the disk-reconcile loop doesn't immediately think the
-// file we just wrote was changed by someone else. Image tabs return an
-// error since the editor only knows how to read those, not re-encode them.
+// file we just wrote was changed by someone else. Non-text tabs (image
+// previews, terminals) have nothing to write and return an error.
 func (t *Tab) Save() error {
+	if t.IsTerminal() {
+		return fmt.Errorf("terminal tabs have nothing to save")
+	}
 	if t.IsImage() {
 		return fmt.Errorf("image tabs are read-only")
 	}
@@ -241,6 +253,9 @@ func (t *Tab) Save() error {
 // invalidated. Image tabs decode the file again instead of replacing
 // the text buffer.
 func (t *Tab) Reload() error {
+	if t.IsTerminal() {
+		return fmt.Errorf("terminal tabs have nothing to reload")
+	}
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
 	}
@@ -300,7 +315,7 @@ func (t *Tab) SelectionText() string {
 // DeleteSelection removes the selected range and collapses the cursor to the
 // start of the selection. A no-op when nothing is selected.
 func (t *Tab) DeleteSelection() {
-	if t.IsImage() || !t.HasSelection() {
+	if !t.IsTextual() || !t.HasSelection() {
 		return
 	}
 	// Selection deletes are always their own undo step — they can wipe
@@ -321,7 +336,7 @@ func (t *Tab) DeleteSelection() {
 // structural undo step — pasted text or "\n" presses shouldn't merge
 // with the surrounding typing burst. No-op on image tabs.
 func (t *Tab) InsertString(s string) {
-	if t.IsImage() {
+	if !t.IsTextual() {
 		return
 	}
 	if t.HasSelection() {
@@ -344,7 +359,7 @@ func (t *Tab) InsertString(s string) {
 // into a single undo step rather than one entry per keystroke. No-op
 // on image tabs.
 func (t *Tab) InsertRune(r rune) {
-	if t.IsImage() {
+	if !t.IsTextual() {
 		return
 	}
 	if t.HasSelection() {
@@ -365,7 +380,7 @@ func (t *Tab) InsertRune(r rune) {
 // Coalesces with adjacent backspaces inside the undo window. No-op on
 // image tabs.
 func (t *Tab) Backspace() {
-	if t.IsImage() {
+	if !t.IsTextual() {
 		return
 	}
 	if t.HasSelection() {
@@ -394,7 +409,7 @@ func (t *Tab) Backspace() {
 // Coalesces with adjacent forward-deletes inside the undo window. No-op
 // on image tabs.
 func (t *Tab) Delete() {
-	if t.IsImage() {
+	if !t.IsTextual() {
 		return
 	}
 	if t.HasSelection() {
@@ -539,8 +554,13 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 
 // Render draws the editor's content (line numbers, code with syntax
 // highlighting, selection, cursor) into the rectangle (x, y, w, h).
-// Image tabs delegate to renderImage instead of drawing text.
+// Image tabs delegate to renderImage and terminal tabs to renderTerminal
+// instead of drawing text.
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
+	if t.IsTerminal() {
+		t.renderTerminal(scr, th, x, y, w, h)
+		return
+	}
 	if t.IsImage() {
 		t.renderImage(scr, th, x, y, w, h)
 		return
