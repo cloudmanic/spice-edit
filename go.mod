@@ -4,7 +4,9 @@ go 1.24.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.24.0
+	github.com/creack/pty v1.1.24
 	github.com/gdamore/tcell/v2 v2.13.9
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 )
 

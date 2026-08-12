@@ -33,7 +33,7 @@ const findBarHeight = 1
 // search.
 func (a *App) openFind() {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	a.closeAllModals() // a modal would otherwise eat our keystrokes
@@ -97,7 +97,7 @@ func (a *App) menuFind() {
 // gray out the menu row on image tabs / no-tab states.
 func (a *App) hasFindable() bool {
 	t := a.activeTabPtr()
-	return t != nil && !t.IsImage()
+	return t != nil && t.IsTextual()
 }
 
 // findBarRect returns the on-screen rectangle of the find bar. Always
