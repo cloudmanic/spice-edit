@@ -209,6 +209,11 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
 			{label: "Find file in project", shortcut: "Esc p", action: (*App).menuFindFile, enabled: (*App).hasFinder},
+			{label: "Find in files", shortcut: "Esc F", action: (*App).menuSearchFiles, enabled: (*App).hasSearchFiles},
+		},
+		// Git
+		{
+			{label: "Git changes", action: (*App).menuDiffViewer, enabled: (*App).hasDiffViewer},
 		},
 		// File actions
 		{
@@ -464,6 +469,26 @@ type App struct {
 	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
 	gitBranch string
 
+	// gitStatus is the most recent snapshot from loadGitStatus (IsRepo,
+	// repo Root, DirtyFiles, Branch). Kept cached so the Git-changes modal
+	// (see diffviewer.go) can render the dirty-file list without forking
+	// `git status` on every open — same snapshot refreshGitStatus already
+	// stamps onto the file tree. The zero value reads as "not a repo /
+	// nothing dirty", the safe default.
+	gitStatus gitStatus
+
+	// diff viewer modal state — the "Git changes" browser (≡ → Git changes
+	// or see diffviewer.go). diffViewFile distinguishes the two views: ""
+	// means the dirty-file list is shown; a set path means the modal is
+	// showing that file's scrollable unified diff.
+	diffOpen     bool
+	diffEntries  []diffEntry
+	diffSelected int
+	diffViewTop  int
+	diffViewFile string
+	diffLines    []string
+	diffScroll   int
+
 	// customActions is the list of user-configured shell-out actions
 	// loaded from ~/.config/spiceedit/actions.json at startup. When
 	// non-empty they prepend a new group to the action menu — see
@@ -481,6 +506,20 @@ type App struct {
 	finderScroll   int
 	finderSelected int
 	finderResults  []finder.Result
+
+	// search modal state — project-wide content search ("Esc F" or
+	// ≡ → Find in files). Reuses the finder's cached path index but
+	// greps file *contents* on a background goroutine; searchGen drops
+	// stale results when the user keeps typing.
+	searchOpen     bool
+	searchQuery    []rune
+	searchCursor   int
+	searchScroll   int
+	searchSelected int
+	searchViewTop  int
+	searchResults  []finder.ContentMatch
+	searchGen      int
+	searchDone     bool
 
 	// confirmCancelHook runs when the active confirm modal is dismissed
 	// without a Yes — i.e. the user picked No, hit Esc, or clicked
@@ -658,6 +697,7 @@ func (a *App) refreshGitStatus() {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
+		a.gitStatus = gitStatus{} // cache the "not a repo" verdict for the diff modal
 		a.refreshGitLineChanges()
 		return
 	}
@@ -665,6 +705,7 @@ func (a *App) refreshGitStatus() {
 	a.tree.DirtyFiles = dirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = st.Branch
+	a.gitStatus = st // cache for the diff modal (Root/IsRepo/DirtyFiles)
 	a.refreshGitLineChanges()
 }
 
@@ -788,6 +829,13 @@ func (a *App) handleEvent(ev tcell.Event) {
 		if a.finderOpen {
 			a.refreshFinderResults()
 		}
+		// A finished rebuild can also unblock a content search that
+		// was typed before the index was ready — re-run it now.
+		if a.searchOpen && len(a.searchQuery) > 0 {
+			a.runSearch()
+		}
+	case *searchResultsEvent:
+		a.applySearchResults(e)
 	}
 }
 
@@ -1053,12 +1101,20 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleContextKey(ev)
 		return
 	}
+	if a.diffOpen {
+		a.handleDiffKey(ev)
+		return
+	}
 	if a.findOpen {
 		a.handleFindKey(ev)
 		return
 	}
 	if a.finderOpen {
 		a.handleFinderKey(ev)
+		return
+	}
+	if a.searchOpen {
+		a.handleSearchKey(ev)
 		return
 	}
 
@@ -1229,8 +1285,16 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		a.handleContextMouse(x, y, btn)
 		return
 	}
+	if a.diffOpen {
+		a.handleDiffMouse(x, y, btn)
+		return
+	}
 	if a.finderOpen {
 		a.handleFinderMouse(x, y, btn)
+		return
+	}
+	if a.searchOpen {
+		a.handleSearchMouse(x, y, btn)
 		return
 	}
 
@@ -2439,8 +2503,14 @@ func (a *App) draw() {
 	if a.formOpen {
 		a.drawForm()
 	}
+	if a.diffOpen {
+		a.drawDiff()
+	}
 	if a.finderOpen {
 		a.drawFinder()
+	}
+	if a.searchOpen {
+		a.drawSearch()
 	}
 }
 

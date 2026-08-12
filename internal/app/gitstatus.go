@@ -258,6 +258,21 @@ func loadGitLineChanges(rootDir, path string) map[int]editor.GitLineChange {
 	return parseGitDiffLines(out)
 }
 
+// loadGitFileDiff returns the full unified-diff output for path against
+// HEAD, one entry per output line (trailing newline trimmed). Used by the
+// Git-changes modal (diffviewer.go) to render a scrollable per-file diff.
+// Best-effort: any git error, empty output, or non-repo root yields nil.
+func loadGitFileDiff(rootDir, path string) []string {
+	if rootDir == "" || path == "" {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=3", "HEAD", "--", path).Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+}
+
 // loadGitHunkPreview returns the unified diff hunk covering zero-based line.
 func loadGitHunkPreview(rootDir, path string, line int) []string {
 	if rootDir == "" || path == "" || line < 0 {

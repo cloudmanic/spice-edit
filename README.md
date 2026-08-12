@@ -62,7 +62,7 @@ The goals, in order:
 - **Toggleable, draggable sidebar** — show/hide the file tree from the
   menu, or drag the splitter to resize it.
 - **Terminal in a tab** — open your `$SHELL` in a real tab (`Esc \`` or
-  **Open terminal in new tab** from the `≡` menu) and run tests or git
+  **Open terminal in new tab** from the`≡` menu) and run tests or git
   without leaving the editor. Rendered by a built-in VT emulator, so it
   works over SSH and inside `tmux` with no passthrough config.
 - **Clipboard over SSH** — OSC 52, including a `tmux` passthrough so
@@ -195,6 +195,7 @@ within half a second tap one of the letters below.
 | `Esc /`     | Toggle line comment  |
 | `Esc f`     | Find in file         |
 | `Esc p`     | Find file in project |
+| `Esc F`     | Find in files        |
 | `Esc \``    | Open terminal tab    |
 
 A lone `Esc` is harmless — if you don't follow it with a bound key
@@ -255,9 +256,41 @@ fuzzy file finder over every non-ignored file in the project:
   inside the editor.
 - Only files are listed — no directories, no symlinked duplicates.
 
+### Find in files
+
+`Esc F` (`Esc` then `Shift+F`, or **Find in files** from the `≡`
+menu) searches the *contents* of every non-ignored file in the
+project — the VS Code "Find in Files" (`Ctrl+Shift+F`) gesture:
+
+```
+┌ Find in files                                              esc ┐
+│  main.go                                                42       │
+│  main.go:3 func widget() {}                                       │
+│  internal/app/app.go:2 // a widget lives here                     │
+│  ...                                                              │
+└──────────────────────────────────────────────────────────┘
+```
+
+- Type a word — matching is **case-insensitive substring**, the same
+  as the in-file find. Each row is one match: `path:line` followed by
+  the source line, with the hit highlighted.
+- `↑` / `↓` to move through matches, `Enter` to jump straight to the
+  match (opens the file and drops the cursor on it), `Esc` to dismiss.
+  Mouse hover highlights, click jumps, and the wheel scrolls the list.
+- Shares the finder's index, so the scope is identical: it greps the
+  same `.gitignore`-honouring file set and never descends into
+  `node_modules`, `.git`, or vendored dumps.
+- Binary files (detected by a NUL byte) and files larger than 2 MB are
+  skipped, so a stray asset or minified bundle can't stall a search.
+- The grep runs on a background goroutine and results stream in as
+  they land, so typing stays responsive even on a large repo.
+
+There's no regex, whole-word, or case-sensitive toggle in v1 — the
+common case is "which files mention this word — take me there."
+
 ## Terminal tabs
 
-`Esc \`` (or **Open terminal in new tab** from the `≡` menu) opens your
+`Esc \`` (or **Open terminal in new tab** from the`≡` menu) opens your
 `$SHELL` in a new tab, so you can run tests, `git`, or anything else
 without dropping the editor or reaching for a second tmux pane.
 
