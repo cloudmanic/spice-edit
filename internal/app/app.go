@@ -77,6 +77,9 @@ const (
 	// terminalTabBtnWidth is the far-right "+"/terminal button's cell count.
 	terminalTabBtnWidth = 3
 
+	// newFileTabBtnWidth is the new-scratch-tab "+" button's cell count.
+	newFileTabBtnWidth = 3
+
 	// modalWidth is the action modal's column count. Sized to comfortably
 	// fit the longest dynamic label — "Rename folder (subdir/)" with a
 	// folder name up to maxLabelSuffix runes — plus the leading "▸ "
@@ -542,6 +545,10 @@ type App struct {
 
 	// Terminal-tab button x in the tab bar (far right). -1 when hidden.
 	newTabBtnX int
+
+	// New-scratch-tab button x in the tab bar, right after the last tab
+	// (or after the menu button when no tabs are open). -1 when hidden.
+	newFileBtnX int
 
 	// Sidebar header tab + find-in-files panel state. Independent of the
 	// searchOpen modal above so the two search surfaces coexist.
@@ -1608,6 +1615,16 @@ func (a *App) tabBarClick(x, _ int) {
 		a.openMenu()
 		return
 	}
+	if a.newFileBtnX >= 0 && x >= a.newFileBtnX && x < a.newFileBtnX+newFileTabBtnWidth {
+		t, err := editor.NewTab("")
+		if err != nil {
+			a.flash(fmt.Sprintf("Error: %v", err))
+			return
+		}
+		a.tabs = append(a.tabs, t)
+		a.activeTab = len(a.tabs) - 1
+		return
+	}
 	if a.newTabBtnX >= 0 && x >= a.newTabBtnX && x < a.newTabBtnX+terminalTabBtnWidth {
 		a.menuOpenTerminal()
 		return
@@ -2648,7 +2665,8 @@ func (a *App) layoutTabs() []tabRect {
 }
 
 // drawTabBar paints the tab bar across the top of the editor area: first
-// the menu button (≡), then any open tabs.
+// the menu button (≡), then any open tabs, then the new-tab button, with
+// the terminal button pinned to the far right.
 func (a *App) drawTabBar() {
 	tx, ty, tw, _ := a.tabBarRect()
 	barStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Muted)
@@ -2726,6 +2744,26 @@ func (a *App) drawTabBar() {
 				closeStyle = st.Foreground(a.theme.Subtle)
 			}
 			a.screen.SetContent(col, ty, '×', nil, closeStyle)
+		}
+	}
+
+	// New-scratch-tab button, right after the last tab. With no tabs it
+	// sits right after the menu button. Drawn before the terminal
+	// button so the far-right pin still wins on overflow.
+	a.newFileBtnX = -1
+	{
+		btnX := a.sidebarW() + menuButtonWidth
+		if len(rects) > 0 {
+			last := rects[len(rects)-1]
+			btnX = last.X + last.Width
+		}
+		if btnX+newFileTabBtnWidth <= tx+tw {
+			a.newFileBtnX = btnX
+			btnStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Accent)
+			for cx := btnX; cx < btnX+newFileTabBtnWidth; cx++ {
+				a.screen.SetContent(cx, ty, ' ', nil, btnStyle)
+			}
+			a.screen.SetContent(btnX+1, ty, '+', nil, btnStyle)
 		}
 	}
 

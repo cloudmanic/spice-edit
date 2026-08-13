@@ -1607,6 +1607,88 @@ func TestTabBarClick_ClosesViaX(t *testing.T) {
 	}
 }
 
+// TestTabBarClick_NewTabButton opens a scratch tab from the "+" button,
+// both with no tabs open (button sits after the menu button) and with a
+// tab open (button sits right after the last tab).
+func TestTabBarClick_NewTabButton(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+
+	// Zero tabs: button lives after the menu button.
+	a.drawTabBar()
+	if a.newFileBtnX < 0 {
+		t.Fatal("new-tab button not laid out with zero tabs")
+	}
+	a.tabBarClick(a.newFileBtnX+1, 0)
+	if len(a.tabs) != 1 {
+		t.Fatalf("tab count = %d, want 1", len(a.tabs))
+	}
+	tab := a.activeTabPtr()
+	if a.activeTab != 0 || tab == nil || tab.Path != "" {
+		t.Fatal("expected focused scratch tab with empty path")
+	}
+	if tab.IsTerminal() {
+		t.Fatal("new-tab button should open a scratch tab, not a terminal")
+	}
+
+	// One tab open: button sits right after the last tab.
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a.openFile(target)
+	a.drawTabBar()
+	rects := a.layoutTabs()
+	last := rects[len(rects)-1]
+	if a.newFileBtnX != last.X+last.Width {
+		t.Fatalf("new-tab button x = %d, want %d (after last tab)", a.newFileBtnX, last.X+last.Width)
+	}
+	a.tabBarClick(a.newFileBtnX+1, 0)
+	if len(a.tabs) != 3 {
+		t.Fatalf("tab count = %d, want 3", len(a.tabs))
+	}
+	if a.activeTab != 2 || a.activeTabPtr().Path != "" {
+		t.Fatal("expected new scratch tab focused")
+	}
+}
+
+// TestDrawTabBar_NewTabButtonRendered verifies the "+" glyph lands on
+// screen after the menu button with zero tabs and after the last tab
+// when tabs are open.
+func TestDrawTabBar_NewTabButtonRendered(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	_, ty, _, _ := a.tabBarRect()
+
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	if a.newFileBtnX < 0 || a.newFileBtnX+1 >= w {
+		t.Fatal("new-tab button not laid out with zero tabs")
+	}
+	if r := cells[ty*w+a.newFileBtnX+1].Runes; len(r) == 0 || r[0] != '+' {
+		t.Fatal("expected + glyph after menu button with zero tabs")
+	}
+
+	a.openFile(target)
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ = a.screen.(tcell.SimulationScreen).GetContents()
+	rects := a.layoutTabs()
+	last := rects[len(rects)-1]
+	wantX := last.X + last.Width
+	if a.newFileBtnX != wantX {
+		t.Fatalf("new-tab button x = %d, want %d (after last tab)", a.newFileBtnX, wantX)
+	}
+	if r := cells[ty*w+wantX+1].Runes; len(r) == 0 || r[0] != '+' {
+		t.Fatal("expected + glyph after last tab")
+	}
+}
+
 // TestDrawStatusBar_RendersBranchRightAligned pins down the lower-right
 // branch label: when gitBranch is set, the rightmost cells of the
 // status bar carry " <branch> " in order, so the user can glance at
