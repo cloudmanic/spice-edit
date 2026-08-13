@@ -240,6 +240,10 @@ func builtinMenuGroups() [][]menuItemDef {
 			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
 			{label: "Open terminal in new tab", shortcut: "Esc `", action: (*App).menuOpenTerminal, enabled: (*App).canOpenTerminal},
 		},
+		// Commands
+		{
+			{label: "Command bar", shortcut: "Esc :", action: (*App).menuCommandBar, enabled: alwaysTrue},
+		},
 		// Quit
 		{
 			{label: "Quit editor", shortcut: "Esc q", action: (*App).menuQuit, enabled: alwaysTrue},
@@ -454,6 +458,18 @@ type App struct {
 	findValue  []rune
 	findCursor int
 	findScroll int
+
+	// Command bar — the ":" line for running editor commands (Esc-: or the
+	// ≡ menu). Currently hosts the cd command with bash-style directory
+	// completion; see commandbar.go. Mutually exclusive with every modal.
+	commandOpen       bool
+	commandValue      []rune
+	commandCursor     int
+	commandScroll     int
+	commandSuggestion []string
+	commandSelected   int
+	commandCycling    bool // candidate list frozen while Tab/arrows adopt
+	commandHint       string
 
 	// Auto-scroll while drag-selecting past the editor's top/bottom edge.
 	// lastDragX/Y is the most recent mouse position so the auto-scroll
@@ -1146,6 +1162,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleSearchKey(ev)
 		return
 	}
+	if a.commandOpen {
+		a.handleCommandKey(ev)
+		return
+	}
 	if a.sidebarTab == "search" && a.sidebarSearchFocused {
 		a.handleSidebarSearchKey(ev)
 		return
@@ -1328,6 +1348,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.searchOpen {
 		a.handleSearchMouse(x, y, btn)
+		return
+	}
+	if a.commandOpen {
+		a.handleCommandMouse(x, y, btn)
 		return
 	}
 
@@ -2547,6 +2571,9 @@ func (a *App) draw() {
 
 	if a.findOpen {
 		a.drawFindBar()
+	}
+	if a.commandOpen {
+		a.drawCommandBar()
 	}
 	a.drawStatusBar()
 
