@@ -387,6 +387,15 @@ func TestTerminalKeyBytes(t *testing.T) {
 		{"ctrl-c (raw byte encoding)", tcell.NewEventKey(tcell.KeyETX, 0, tcell.ModCtrl), "\x03"},
 		{"ctrl-d (raw byte encoding)", tcell.NewEventKey(tcell.KeyEOT, 0, tcell.ModCtrl), "\x04"},
 		{"alt-rune is ESC prefixed", tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModAlt), "\x1bb"},
+		{"shift-tab is CSI Z", tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModShift), "\x1b[Z"},
+		{"f1", tcell.NewEventKey(tcell.KeyF1, 0, tcell.ModNone), "\x1bOP"},
+		{"f4", tcell.NewEventKey(tcell.KeyF4, 0, tcell.ModNone), "\x1bOS"},
+		{"f5", tcell.NewEventKey(tcell.KeyF5, 0, tcell.ModNone), "\x1b[15~"},
+		{"f12", tcell.NewEventKey(tcell.KeyF12, 0, tcell.ModNone), "\x1b[24~"},
+		{"alt-left is backward-word", tcell.NewEventKey(tcell.KeyLeft, 0, tcell.ModAlt), "\x1bb"},
+		{"alt-right is forward-word", tcell.NewEventKey(tcell.KeyRight, 0, tcell.ModAlt), "\x1bf"},
+		{"alt-up", tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModAlt), "\x1b[1;3A"},
+		{"alt-down", tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModAlt), "\x1b[1;3B"},
 	}
 
 	for _, tc := range cases {

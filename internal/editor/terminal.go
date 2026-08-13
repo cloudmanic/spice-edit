@@ -523,17 +523,36 @@ func TerminalKeyBytes(ev *tcell.EventKey) []byte {
 		return []byte{'\r'}
 	case tcell.KeyTab:
 		return []byte{'\t'}
+	case tcell.KeyBacktab:
+		// Shift-Tab, used by readline and CLIs like codex to cycle
+		// completion backwards. xterm encodes it as CSI Z.
+		return []byte("\x1b[Z")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		// DEL (0x7f), not BS — this is what readline and every modern
 		// shell treat as "erase previous character".
 		return []byte{0x7f}
 	case tcell.KeyUp:
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			return []byte("\x1b[1;3A")
+		}
 		return []byte("\x1b[A")
 	case tcell.KeyDown:
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			return []byte("\x1b[1;3B")
+		}
 		return []byte("\x1b[B")
 	case tcell.KeyRight:
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			// ESC f is readline's forward-word, what Alt-Right means
+			// in every shell.
+			return []byte("\x1bf")
+		}
 		return []byte("\x1b[C")
 	case tcell.KeyLeft:
+		if ev.Modifiers()&tcell.ModAlt != 0 {
+			// ESC b is readline's backward-word (Alt-Left).
+			return []byte("\x1bb")
+		}
 		return []byte("\x1b[D")
 	case tcell.KeyHome:
 		return []byte("\x1b[H")
@@ -547,6 +566,30 @@ func TerminalKeyBytes(ev *tcell.EventKey) []byte {
 		return []byte("\x1b[3~")
 	case tcell.KeyInsert:
 		return []byte("\x1b[2~")
+	case tcell.KeyF1:
+		return []byte("\x1bOP")
+	case tcell.KeyF2:
+		return []byte("\x1bOQ")
+	case tcell.KeyF3:
+		return []byte("\x1bOR")
+	case tcell.KeyF4:
+		return []byte("\x1bOS")
+	case tcell.KeyF5:
+		return []byte("\x1b[15~")
+	case tcell.KeyF6:
+		return []byte("\x1b[17~")
+	case tcell.KeyF7:
+		return []byte("\x1b[18~")
+	case tcell.KeyF8:
+		return []byte("\x1b[19~")
+	case tcell.KeyF9:
+		return []byte("\x1b[20~")
+	case tcell.KeyF10:
+		return []byte("\x1b[21~")
+	case tcell.KeyF11:
+		return []byte("\x1b[23~")
+	case tcell.KeyF12:
+		return []byte("\x1b[24~")
 	}
 
 	// Control keys reach us in one of two encodings, and we have to
