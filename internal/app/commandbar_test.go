@@ -151,6 +151,40 @@ func TestCommandCompletionNested(t *testing.T) {
 	}
 }
 
+// TestCommandCompletionAbsolute keeps the full directory prefix when the
+// token is an absolute path — "/var/www/new" + Tab must yield
+// "/var/www/newvillacarmen", not just "newvillacarmen".
+func TestCommandCompletionAbsolute(t *testing.T) {
+	root := t.TempDir()
+	seedDirs(t, root)
+	a := newTestApp(t, t.TempDir())
+	a.rootDir = root
+	a.openCommandBar()
+
+	typeIntoCommand(a, "cd "+root+"/al")
+	a.handleCommandKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	want := "cd " + root + "/alpha"
+	if got := string(a.commandValue); got != want {
+		t.Errorf("value = %q, want %q", got, want)
+	}
+
+	// Cycle must keep the prefix too.
+	a.handleCommandKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	want = "cd " + root + "/alphabeta"
+	if got := string(a.commandValue); got != want {
+		t.Errorf("after cycle = %q, want %q", got, want)
+	}
+
+	// Root-level prefix "/<x>" gets a single leading slash.
+	a.closeCommandBar()
+	a.openCommandBar()
+	typeIntoCommand(a, "cd /tm")
+	a.handleCommandKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+	if got := string(a.commandValue); got != "cd /tmp " {
+		t.Errorf("root-level value = %q, want %q", got, "cd /tmp ")
+	}
+}
+
 // TestCommandCompletionTilde completes under the home directory while
 // preserving the ~ spelling.
 func TestCommandCompletionTilde(t *testing.T) {

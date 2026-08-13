@@ -479,7 +479,12 @@ func (a *App) commandSearchBase(prefix string) (search, base, outPrefix string) 
 		if strings.HasSuffix(prefix, "/") {
 			return prefix, "", prefix
 		}
-		return filepath.Dir(prefix), filepath.Base(prefix), ""
+		d := filepath.Dir(prefix)
+		pre := d + "/"
+		if d == "/" {
+			pre = "/" // avoid the doubled slash
+		}
+		return d, filepath.Base(prefix), pre
 	}
 	if strings.HasSuffix(prefix, "/") {
 		return filepath.Join(a.rootDir, prefix), "", prefix
