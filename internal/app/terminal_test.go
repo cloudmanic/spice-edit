@@ -407,3 +407,25 @@ func TestClose_ReapsTerminalsOnQuit(t *testing.T) {
 		t.Errorf("closeAllTerminals took %v; shells should be hung up concurrently", elapsed)
 	}
 }
+
+// TestTabBarClick_TerminalButton verifies the far-right tab-bar button opens
+// and focuses a terminal tab.
+func TestTabBarClick_TerminalButton(t *testing.T) {
+	skipWithoutPTY(t)
+	a := newTestApp(t, t.TempDir())
+	t.Cleanup(a.closeAllTerminals)
+
+	a.drawTabBar() // lays out the far-right button and sets newTabBtnX
+	if a.newTabBtnX < 0 {
+		t.Fatal("terminal button not laid out")
+	}
+
+	a.tabBarClick(a.newTabBtnX+1, 0)
+
+	if len(a.tabs) != 1 {
+		t.Fatalf("tab count = %d, want 1", len(a.tabs))
+	}
+	if a.activeTab != 0 || a.activeTabPtr() == nil || !a.activeTabPtr().IsTerminal() {
+		t.Fatal("terminal tab not opened/focused")
+	}
+}

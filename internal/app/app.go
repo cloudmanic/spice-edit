@@ -74,6 +74,9 @@ const (
 	// of the tab bar. Tabs render starting just after it.
 	menuButtonWidth = 4
 
+	// terminalTabBtnWidth is the far-right "+"/terminal button's cell count.
+	terminalTabBtnWidth = 3
+
 	// modalWidth is the action modal's column count. Sized to comfortably
 	// fit the longest dynamic label — "Rename folder (subdir/)" with a
 	// folder name up to maxLabelSuffix runes — plus the leading "▸ "
@@ -521,6 +524,25 @@ type App struct {
 	searchGen      int
 	searchDone     bool
 
+	// Terminal-tab button x in the tab bar (far right). -1 when hidden.
+	newTabBtnX int
+
+	// Sidebar header tab + find-in-files panel state. Independent of the
+	// searchOpen modal above so the two search surfaces coexist.
+	sidebarTab                  string // "files" | "search"
+	sidebarSearchFocused        bool
+	sidebarSearchQuery          []rune
+	sidebarSearchCursor         int
+	sidebarSearchScroll         int
+	sidebarSearchResults        []finder.ContentMatch
+	sidebarSearchGen            int
+	sidebarSearchDone           bool
+	sidebarSearchSelected       int
+	sidebarSearchViewTop        int
+	sidebarSearchCollapsed      map[string]bool
+	sidebarSearchRows           []sidebarSearchRow
+	sidebarSearchVisibleMatches []finder.ContentMatch
+
 	// confirmCancelHook runs when the active confirm modal is dismissed
 	// without a Yes — i.e. the user picked No, hit Esc, or clicked
 	// outside. Set after openConfirm by flows that want to react to the
@@ -562,6 +584,7 @@ func New(rootDir string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
+		sidebarTab:     "files",
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.loadSpiceConfig()
@@ -621,6 +644,7 @@ func NewSingleFile(filePath string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   false,
 		sidebarWidth:   defaultSidebarWidth,
+		sidebarTab:     "files",
 	}
 	a.setActiveFolder(rootDir)
 	a.loadSpiceConfig()
@@ -834,8 +858,13 @@ func (a *App) handleEvent(ev tcell.Event) {
 		if a.searchOpen && len(a.searchQuery) > 0 {
 			a.runSearch()
 		}
+		if a.sidebarTab == "search" && len(a.sidebarSearchQuery) > 0 {
+			a.sidebarRunSearch()
+		}
 	case *searchResultsEvent:
 		a.applySearchResults(e)
+	case *sidebarSearchResultsEvent:
+		a.applySidebarSearchResults(e)
 	}
 }
 
@@ -1115,6 +1144,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	}
 	if a.searchOpen {
 		a.handleSearchKey(ev)
+		return
+	}
+	if a.sidebarTab == "search" && a.sidebarSearchFocused {
+		a.handleSidebarSearchKey(ev)
 		return
 	}
 
@@ -1422,6 +1455,13 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
 	if sw := a.sidebarW(); sw > 0 && x < sw {
+		if a.sidebarTab == "search" && y >= 2 {
+			a.sidebarSearchViewTop += delta
+			if a.sidebarSearchViewTop < 0 {
+				a.sidebarSearchViewTop = 0
+			}
+			return
+		}
 		a.tree.Scroll(delta)
 		return
 	}
@@ -1454,6 +1494,9 @@ func (a *App) scrollAtH(x, y, delta int) {
 // menu's New File defaults to a sensible target even after the context
 // menu closes.
 func (a *App) tryTreeContextClick(x, y int) bool {
+	if a.sidebarTab != "files" {
+		return false
+	}
 	sw := a.sidebarW()
 	if sw <= 0 {
 		return false
@@ -1484,7 +1527,24 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 // since the root is always shown and there's no useful "collapsed
 // root" state.
 func (a *App) sidebarClick(x, y int) {
-	sx, sy, _, _ := a.sidebarRect()
+	sx, sy, sw, _ := a.sidebarRect()
+
+	// Header tab strip (row 0): Files | Find in files.
+	if y == sy {
+		if x < sx+sw/2 {
+			a.switchSidebarTab("files")
+		} else {
+			a.switchSidebarTab("search")
+		}
+		return
+	}
+
+	// Find-in-files panel owns the sidebar body when its tab is active.
+	if a.sidebarTab == "search" {
+		a.sidebarSearchClick(x, y)
+		return
+	}
+
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return
@@ -1522,6 +1582,10 @@ func (a *App) tabBarClick(x, _ int) {
 	sw := a.sidebarW()
 	if x >= sw && x < sw+menuButtonWidth {
 		a.openMenu()
+		return
+	}
+	if a.newTabBtnX >= 0 && x >= a.newTabBtnX && x < a.newTabBtnX+terminalTabBtnWidth {
+		a.menuOpenTerminal()
 		return
 	}
 	for _, r := range a.lastTabRects {
@@ -2465,6 +2529,10 @@ func (a *App) draw() {
 	if a.sidebarShown {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+		a.drawSidebarTabs()
+		if a.sidebarTab == "search" {
+			a.drawSidebarSearch()
+		}
 		a.drawSplitter()
 	}
 
@@ -2631,6 +2699,27 @@ func (a *App) drawTabBar() {
 				closeStyle = st.Foreground(a.theme.Subtle)
 			}
 			a.screen.SetContent(col, ty, '×', nil, closeStyle)
+		}
+	}
+
+	// Terminal-tab button pinned to the far right of the tab bar. Drawn
+	// last so it covers any tab that would overflow beneath it.
+	a.newTabBtnX = -1
+	if a.canOpenTerminal() {
+		btnX := tx + tw - terminalTabBtnWidth
+		if btnX >= tx {
+			a.newTabBtnX = btnX
+			btnStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Accent)
+			for cx := btnX; cx < tx+tw; cx++ {
+				a.screen.SetContent(cx, ty, ' ', nil, btnStyle)
+			}
+			if a.iconsOn() {
+				for _, gr := range icons.Terminal {
+					a.screen.SetContent(btnX+1, ty, gr, nil, btnStyle)
+				}
+			} else {
+				a.screen.SetContent(btnX+1, ty, '+', nil, btnStyle)
+			}
 		}
 	}
 }
