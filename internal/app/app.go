@@ -22,7 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -72,6 +74,12 @@ const (
 	// of the tab bar. Tabs render starting just after it.
 	menuButtonWidth = 4
 
+	// terminalTabBtnWidth is the far-right "+"/terminal button's cell count.
+	terminalTabBtnWidth = 3
+
+	// newFileTabBtnWidth is the new-scratch-tab "+" button's cell count.
+	newFileTabBtnWidth = 3
+
 	// modalWidth is the action modal's column count. Sized to comfortably
 	// fit the longest dynamic label — "Rename folder (subdir/)" with a
 	// folder name up to maxLabelSuffix runes — plus the leading "▸ "
@@ -115,6 +123,18 @@ type treeRefreshEvent struct {
 
 // When satisfies the tcell.Event interface.
 func (e *treeRefreshEvent) When() time.Time { return e.when }
+
+// termOutputEvent is posted by a terminal tab's PTY reader goroutine when
+// the child shell produces output. It carries no payload — the emulator
+// state was already updated under its own lock; this exists purely to
+// wake the main loop so it redraws. Following the project's rule that
+// background goroutines never mutate UI state directly.
+type termOutputEvent struct {
+	when time.Time
+}
+
+// When satisfies the tcell.Event interface.
+func (e *termOutputEvent) When() time.Time { return e.when }
 
 // customActionDoneEvent is posted by runCustomAction when its background
 // shell-out finishes. Carries the label and any error so the main loop
@@ -195,6 +215,11 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
 			{label: "Find file in project", shortcut: "Esc p", action: (*App).menuFindFile, enabled: (*App).hasFinder},
+			{label: "Find in files", shortcut: "Esc F", action: (*App).menuSearchFiles, enabled: (*App).hasSearchFiles},
+		},
+		// Git
+		{
+			{label: "Git changes", action: (*App).menuDiffViewer, enabled: (*App).hasDiffViewer},
 		},
 		// File actions
 		{
@@ -216,6 +241,11 @@ func builtinMenuGroups() [][]menuItemDef {
 		// View toggle
 		{
 			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
+			{label: "Open terminal in new tab", shortcut: "Esc `", action: (*App).menuOpenTerminal, enabled: (*App).canOpenTerminal},
+		},
+		// Commands
+		{
+			{label: "Command bar", shortcut: "Esc :", action: (*App).menuCommandBar, enabled: alwaysTrue},
 		},
 		// Quit
 		{
@@ -432,6 +462,18 @@ type App struct {
 	findCursor int
 	findScroll int
 
+	// Command bar — the ":" line for running editor commands (Esc-: or the
+	// ≡ menu). Currently hosts the cd command with bash-style directory
+	// completion; see commandbar.go. Mutually exclusive with every modal.
+	commandOpen       bool
+	commandValue      []rune
+	commandCursor     int
+	commandScroll     int
+	commandSuggestion []string
+	commandSelected   int
+	commandCycling    bool // candidate list frozen while Tab/arrows adopt
+	commandHint       string
+
 	// Auto-scroll while drag-selecting past the editor's top/bottom edge.
 	// lastDragX/Y is the most recent mouse position so the auto-scroll
 	// tick can extend the selection at the user's column even though the
@@ -448,6 +490,26 @@ type App struct {
 	// short commit SHA when HEAD is detached). Empty when the root isn't
 	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
 	gitBranch string
+
+	// gitStatus is the most recent snapshot from loadGitStatus (IsRepo,
+	// repo Root, DirtyFiles, Branch). Kept cached so the Git-changes modal
+	// (see diffviewer.go) can render the dirty-file list without forking
+	// `git status` on every open — same snapshot refreshGitStatus already
+	// stamps onto the file tree. The zero value reads as "not a repo /
+	// nothing dirty", the safe default.
+	gitStatus gitStatus
+
+	// diff viewer modal state — the "Git changes" browser (≡ → Git changes
+	// or see diffviewer.go). diffViewFile distinguishes the two views: ""
+	// means the dirty-file list is shown; a set path means the modal is
+	// showing that file's scrollable unified diff.
+	diffOpen     bool
+	diffEntries  []diffEntry
+	diffSelected int
+	diffViewTop  int
+	diffViewFile string
+	diffLines    []string
+	diffScroll   int
 
 	// customActions is the list of user-configured shell-out actions
 	// loaded from ~/.config/spiceedit/actions.json at startup. When
@@ -466,6 +528,43 @@ type App struct {
 	finderScroll   int
 	finderSelected int
 	finderResults  []finder.Result
+
+	// search modal state — project-wide content search ("Esc F" or
+	// ≡ → Find in files). Reuses the finder's cached path index but
+	// greps file *contents* on a background goroutine; searchGen drops
+	// stale results when the user keeps typing.
+	searchOpen     bool
+	searchQuery    []rune
+	searchCursor   int
+	searchScroll   int
+	searchSelected int
+	searchViewTop  int
+	searchResults  []finder.ContentMatch
+	searchGen      int
+	searchDone     bool
+
+	// Terminal-tab button x in the tab bar (far right). -1 when hidden.
+	newTabBtnX int
+
+	// New-scratch-tab button x in the tab bar, right after the last tab
+	// (or after the menu button when no tabs are open). -1 when hidden.
+	newFileBtnX int
+
+	// Sidebar header tab + find-in-files panel state. Independent of the
+	// searchOpen modal above so the two search surfaces coexist.
+	sidebarTab                  string // "files" | "search"
+	sidebarSearchFocused        bool
+	sidebarSearchQuery          []rune
+	sidebarSearchCursor         int
+	sidebarSearchScroll         int
+	sidebarSearchResults        []finder.ContentMatch
+	sidebarSearchGen            int
+	sidebarSearchDone           bool
+	sidebarSearchSelected       int
+	sidebarSearchViewTop        int
+	sidebarSearchCollapsed      map[string]bool
+	sidebarSearchRows           []sidebarSearchRow
+	sidebarSearchVisibleMatches []finder.ContentMatch
 
 	// confirmCancelHook runs when the active confirm modal is dismissed
 	// without a Yes — i.e. the user picked No, hit Esc, or clicked
@@ -508,6 +607,7 @@ func New(rootDir string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
+		sidebarTab:     "files",
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.loadSpiceConfig()
@@ -567,6 +667,7 @@ func NewSingleFile(filePath string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   false,
 		sidebarWidth:   defaultSidebarWidth,
+		sidebarTab:     "files",
 	}
 	a.setActiveFolder(rootDir)
 	a.loadSpiceConfig()
@@ -643,6 +744,7 @@ func (a *App) refreshGitStatus() {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
+		a.gitStatus = gitStatus{} // cache the "not a repo" verdict for the diff modal
 		a.refreshGitLineChanges()
 		return
 	}
@@ -650,13 +752,14 @@ func (a *App) refreshGitStatus() {
 	a.tree.DirtyFiles = dirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = st.Branch
+	a.gitStatus = st // cache for the diff modal (Root/IsRepo/DirtyFiles)
 	a.refreshGitLineChanges()
 }
 
 // refreshGitLineChanges refreshes gutter markers for every open text tab.
 func (a *App) refreshGitLineChanges() {
 	for _, tab := range a.tabs {
-		if tab == nil || tab.Path == "" || tab.IsImage() {
+		if tab == nil || tab.Path == "" || !tab.IsTextual() {
 			continue
 		}
 		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
@@ -698,9 +801,31 @@ func (a *App) stopTreeRefresh() {
 func (a *App) Close() {
 	a.stopTreeRefresh()
 	a.stopAutoScroll()
+	a.closeAllTerminals()
 	if a.screen != nil {
 		a.screen.Fini()
 	}
+}
+
+// closeAllTerminals kills every child shell the session started. Called
+// from Close so quitting the editor doesn't orphan them.
+//
+// The closes run concurrently because each one may wait up to
+// terminalCloseGrace for its shell to hang up its jobs; doing that
+// serially would freeze the UI for grace × N on the way out.
+func (a *App) closeAllTerminals() {
+	var wg sync.WaitGroup
+	for _, t := range a.tabs {
+		if !t.IsTerminal() {
+			continue
+		}
+		wg.Add(1)
+		go func(tab *editor.Tab) {
+			defer wg.Done()
+			tab.CloseTerminal()
+		}(t)
+	}
+	wg.Wait()
 }
 
 // Run is the editor's main event loop. It blocks on PollEvent, dispatches
@@ -736,6 +861,10 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleAutoScroll()
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
+	case *termOutputEvent:
+		// Nothing to do — the terminal's emulator state is already
+		// current. Falling through to the loop's unconditional redraw
+		// is the whole point of the event.
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
 	case *formatDoneEvent:
@@ -747,6 +876,18 @@ func (a *App) handleEvent(ev tcell.Event) {
 		if a.finderOpen {
 			a.refreshFinderResults()
 		}
+		// A finished rebuild can also unblock a content search that
+		// was typed before the index was ready — re-run it now.
+		if a.searchOpen && len(a.searchQuery) > 0 {
+			a.runSearch()
+		}
+		if a.sidebarTab == "search" && len(a.sidebarSearchQuery) > 0 {
+			a.sidebarRunSearch()
+		}
+	case *searchResultsEvent:
+		a.applySearchResults(e)
+	case *sidebarSearchResultsEvent:
+		a.applySidebarSearchResults(e)
 	}
 }
 
@@ -1012,12 +1153,28 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleContextKey(ev)
 		return
 	}
+	if a.diffOpen {
+		a.handleDiffKey(ev)
+		return
+	}
 	if a.findOpen {
 		a.handleFindKey(ev)
 		return
 	}
 	if a.finderOpen {
 		a.handleFinderKey(ev)
+		return
+	}
+	if a.searchOpen {
+		a.handleSearchKey(ev)
+		return
+	}
+	if a.commandOpen {
+		a.handleCommandKey(ev)
+		return
+	}
+	if a.sidebarTab == "search" && a.sidebarSearchFocused {
+		a.handleSidebarSearchKey(ev)
 		return
 	}
 
@@ -1047,7 +1204,15 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// key is bound in the leader table, fire the action and consume the
 	// keystroke. Unbound keys fall through to normal handling so a stray
 	// Esc doesn't swallow the next character the user types.
-	if !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs {
+	//
+	// Terminal tabs opt out of the single-Esc leader entirely. Esc is a
+	// key shell users press constantly (vi keybindings, cancelling a
+	// completion, plain habit), and swallowing the *next* rune to run an
+	// editor action is both surprising and destructive: "Esc" then "q"
+	// would quit the editor — hanging up every running shell — instead of
+	// typing "q" at the prompt. Double-Esc still opens the action menu,
+	// so every action remains reachable.
+	if !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs && !a.activeTabIsTerminal() {
 		if ev.Key() == tcell.KeyRune {
 			if action := leaderActionFor(ev.Rune()); action != nil {
 				a.lastEscape = time.Time{}
@@ -1084,6 +1249,18 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 
 	tab := a.activeTabPtr()
 	if tab == nil {
+		return
+	}
+	// Terminal tabs forward almost every keystroke to the child shell,
+	// including the Ctrl keys the editor otherwise refuses to bind —
+	// there they mean "signal the foreground process", not an editor
+	// action. Esc never reaches here (it's consumed above for the menu
+	// and leader table), which is the one sequence a shell user has to
+	// reach via Esc-Esc → menu instead.
+	if tab.IsTerminal() {
+		if b := editor.TerminalKeyBytes(ev); b != nil {
+			tab.Term.Write(b)
+		}
 		return
 	}
 	// Image-preview tabs are read-only — no cursor, no editing, no
@@ -1168,8 +1345,20 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		a.handleContextMouse(x, y, btn)
 		return
 	}
+	if a.diffOpen {
+		a.handleDiffMouse(x, y, btn)
+		return
+	}
 	if a.finderOpen {
 		a.handleFinderMouse(x, y, btn)
+		return
+	}
+	if a.searchOpen {
+		a.handleSearchMouse(x, y, btn)
+		return
+	}
+	if a.commandOpen {
+		a.handleCommandMouse(x, y, btn)
 		return
 	}
 
@@ -1297,6 +1486,13 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
 	if sw := a.sidebarW(); sw > 0 && x < sw {
+		if a.sidebarTab == "search" && y >= 2 {
+			a.sidebarSearchViewTop += delta
+			if a.sidebarSearchViewTop < 0 {
+				a.sidebarSearchViewTop = 0
+			}
+			return
+		}
 		a.tree.Scroll(delta)
 		return
 	}
@@ -1329,6 +1525,9 @@ func (a *App) scrollAtH(x, y, delta int) {
 // menu's New File defaults to a sensible target even after the context
 // menu closes.
 func (a *App) tryTreeContextClick(x, y int) bool {
+	if a.sidebarTab != "files" {
+		return false
+	}
 	sw := a.sidebarW()
 	if sw <= 0 {
 		return false
@@ -1359,7 +1558,24 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 // since the root is always shown and there's no useful "collapsed
 // root" state.
 func (a *App) sidebarClick(x, y int) {
-	sx, sy, _, _ := a.sidebarRect()
+	sx, sy, sw, _ := a.sidebarRect()
+
+	// Header tab strip (row 0): Files | Find in files.
+	if y == sy {
+		if x < sx+sw/2 {
+			a.switchSidebarTab("files")
+		} else {
+			a.switchSidebarTab("search")
+		}
+		return
+	}
+
+	// Find-in-files panel owns the sidebar body when its tab is active.
+	if a.sidebarTab == "search" {
+		a.sidebarSearchClick(x, y)
+		return
+	}
+
 	n, ok := a.tree.HitTest(x-sx, y-sy)
 	if !ok {
 		return
@@ -1399,6 +1615,20 @@ func (a *App) tabBarClick(x, _ int) {
 		a.openMenu()
 		return
 	}
+	if a.newFileBtnX >= 0 && x >= a.newFileBtnX && x < a.newFileBtnX+newFileTabBtnWidth {
+		t, err := editor.NewTab("")
+		if err != nil {
+			a.flash(fmt.Sprintf("Error: %v", err))
+			return
+		}
+		a.tabs = append(a.tabs, t)
+		a.activeTab = len(a.tabs) - 1
+		return
+	}
+	if a.newTabBtnX >= 0 && x >= a.newTabBtnX && x < a.newTabBtnX+terminalTabBtnWidth {
+		a.menuOpenTerminal()
+		return
+	}
 	for _, r := range a.lastTabRects {
 		if x >= r.X && x < r.X+r.Width {
 			if x == r.CloseX {
@@ -1426,11 +1656,11 @@ func (a *App) syncActiveTreeFile() {
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
-// the caret, optionally selecting a word on double-click. Image tabs
-// have no caret, so the press is dropped.
+// the caret, optionally selecting a word on double-click. Non-text tabs
+// (image previews, terminals) have no caret, so the press is dropped.
 func (a *App) editorPress(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1478,7 +1708,7 @@ func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
 // drop the drag entirely.
 func (a *App) editorDrag(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1799,6 +2029,9 @@ func (a *App) closeTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
+	// Terminal tabs own a child shell — tear it down with the tab so we
+	// don't leak a running process for the rest of the session.
+	a.tabs[idx].CloseTerminal()
 	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
 	if a.activeTab >= len(a.tabs) {
 		a.activeTab = len(a.tabs) - 1
@@ -1942,7 +2175,7 @@ func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 // preview. Used by Save and Save & Close.
 func (a *App) hasSavableTab() bool {
 	t := a.activeTabPtr()
-	return t != nil && t.Path != "" && !t.IsImage()
+	return t != nil && t.Path != "" && t.IsTextual()
 }
 
 // hasFileTab reports whether the active tab is backed by a real file
@@ -1963,7 +2196,7 @@ func (a *App) hasSelection() bool {
 // known single-line comment marker.
 func (a *App) hasCommentableTab() bool {
 	t := a.activeTabPtr()
-	if t == nil || t.IsImage() {
+	if t == nil || !t.IsTextual() {
 		return false
 	}
 	_, ok := editor.LineCommentPrefix(t.Path)
@@ -2161,7 +2394,7 @@ func (a *App) menuPaste() {
 func (a *App) menuToggleLineComment() {
 	a.closeMenu()
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	changed, ok := tab.ToggleLineComment()
@@ -2209,6 +2442,74 @@ func (a *App) sidebarToggleLabel() string {
 		return "Hide file explorer"
 	}
 	return "Show file explorer"
+}
+
+// activeTabIsTerminal reports whether the focused tab hosts a shell.
+// Used to keep the Esc-leader table from stealing keystrokes that belong
+// to the terminal.
+func (a *App) activeTabIsTerminal() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.IsTerminal()
+}
+
+// canOpenTerminal reports whether a terminal tab can be opened. PTYs are
+// a unix affair — creack/pty compiles on Windows but every call returns
+// ErrUnsupported — so the row is greyed out there rather than offering an
+// action that can only fail.
+func (a *App) canOpenTerminal() bool {
+	return runtime.GOOS != "windows"
+}
+
+// terminalCwd picks the working directory a new terminal starts in: the
+// folder the user is "in" according to the tree (activeFolder, which
+// tracks the selected file's directory), falling back to the project
+// root. This is the behaviour that makes `go test ./...` land where the
+// user expects instead of at a root they navigated away from.
+func (a *App) terminalCwd() string {
+	if a.activeFolder != "" {
+		if info, err := os.Stat(a.activeFolder); err == nil && info.IsDir() {
+			return a.activeFolder
+		}
+	}
+	return a.rootDir
+}
+
+// menuOpenTerminal opens a new tab running the user's shell and focuses
+// it. The shell is started at terminalCwd() and sized to the current
+// editor pane; the first Render corrects the size if the pane geometry
+// differs from our estimate.
+//
+// Output arrives on a background goroutine which posts termOutputEvent
+// to wake the main loop — the goroutine never touches UI state itself.
+func (a *App) menuOpenTerminal() {
+	a.closeMenu()
+	if !a.canOpenTerminal() {
+		a.flash("Terminal tabs aren't supported on this platform")
+		return
+	}
+
+	w, h := a.editorSize()
+	scr := a.screen
+	notify := func() {
+		// PostEvent can block if the queue is full and the main loop is
+		// busy; the non-blocking variant would drop redraws. A blocking
+		// post is correct here because the reader goroutine has nothing
+		// else to do, and it can't deadlock — the main loop drains the
+		// queue continuously.
+		_ = scr.PostEvent(&termOutputEvent{when: time.Now()})
+	}
+
+	tab, err := editor.NewTerminalTab(a.terminalCwd(), w, h, notify)
+	if err != nil {
+		a.openInfo("Couldn't open terminal", []string{err.Error()})
+		return
+	}
+	a.tabs = append(a.tabs, tab)
+	a.activeTab = len(a.tabs) - 1
+	// A terminal has no file, so this clears the tree's highlight rather
+	// than leaving the previously active file looking selected.
+	a.syncActiveTreeFile()
+	a.flash("Terminal opened — Esc Esc for the menu")
 }
 
 // menuQuit exits the editor. When any tab has unsaved changes, opens the
@@ -2269,6 +2570,10 @@ func (a *App) draw() {
 	if a.sidebarShown {
 		sx, sy, sw, sh := a.sidebarRect()
 		a.tree.Render(a.screen, a.theme, sx, sy, sw, sh)
+		a.drawSidebarTabs()
+		if a.sidebarTab == "search" {
+			a.drawSidebarSearch()
+		}
 		a.drawSplitter()
 	}
 
@@ -2283,6 +2588,9 @@ func (a *App) draw() {
 
 	if a.findOpen {
 		a.drawFindBar()
+	}
+	if a.commandOpen {
+		a.drawCommandBar()
 	}
 	a.drawStatusBar()
 
@@ -2307,8 +2615,14 @@ func (a *App) draw() {
 	if a.formOpen {
 		a.drawForm()
 	}
+	if a.diffOpen {
+		a.drawDiff()
+	}
 	if a.finderOpen {
 		a.drawFinder()
+	}
+	if a.searchOpen {
+		a.drawSearch()
 	}
 }
 
@@ -2351,7 +2665,8 @@ func (a *App) layoutTabs() []tabRect {
 }
 
 // drawTabBar paints the tab bar across the top of the editor area: first
-// the menu button (≡), then any open tabs.
+// the menu button (≡), then any open tabs, then the new-tab button, with
+// the terminal button pinned to the far right.
 func (a *App) drawTabBar() {
 	tx, ty, tw, _ := a.tabBarRect()
 	barStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Muted)
@@ -2396,6 +2711,12 @@ func (a *App) drawTabBar() {
 			name := tab.DisplayName()
 			glyph := icons.For(name, false, false)
 			gfg := icons.ColorFor(name, false, fg)
+			// Terminal tabs aren't files — give them the shell glyph
+			// instead of the generic "unknown file" one.
+			if tab.IsTerminal() {
+				glyph = icons.Terminal
+				gfg = fg
+			}
 			gst := tcell.StyleDefault.Background(bg).Foreground(gfg)
 			if active {
 				gst = gst.Bold(true)
@@ -2423,6 +2744,47 @@ func (a *App) drawTabBar() {
 				closeStyle = st.Foreground(a.theme.Subtle)
 			}
 			a.screen.SetContent(col, ty, '×', nil, closeStyle)
+		}
+	}
+
+	// New-scratch-tab button, right after the last tab. With no tabs it
+	// sits right after the menu button. Drawn before the terminal
+	// button so the far-right pin still wins on overflow.
+	a.newFileBtnX = -1
+	{
+		btnX := a.sidebarW() + menuButtonWidth
+		if len(rects) > 0 {
+			last := rects[len(rects)-1]
+			btnX = last.X + last.Width
+		}
+		if btnX+newFileTabBtnWidth <= tx+tw {
+			a.newFileBtnX = btnX
+			btnStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Accent)
+			for cx := btnX; cx < btnX+newFileTabBtnWidth; cx++ {
+				a.screen.SetContent(cx, ty, ' ', nil, btnStyle)
+			}
+			a.screen.SetContent(btnX+1, ty, '+', nil, btnStyle)
+		}
+	}
+
+	// Terminal-tab button pinned to the far right of the tab bar. Drawn
+	// last so it covers any tab that would overflow beneath it.
+	a.newTabBtnX = -1
+	if a.canOpenTerminal() {
+		btnX := tx + tw - terminalTabBtnWidth
+		if btnX >= tx {
+			a.newTabBtnX = btnX
+			btnStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Accent)
+			for cx := btnX; cx < tx+tw; cx++ {
+				a.screen.SetContent(cx, ty, ' ', nil, btnStyle)
+			}
+			if a.iconsOn() {
+				for _, gr := range icons.Terminal {
+					a.screen.SetContent(btnX+1, ty, gr, nil, btnStyle)
+				}
+			} else {
+				a.screen.SetContent(btnX+1, ty, '+', nil, btnStyle)
+			}
 		}
 	}
 }
@@ -2517,7 +2879,16 @@ func (a *App) drawStatusBar() {
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
 	} else if tab := a.activeTabPtr(); tab != nil {
-		if tab.IsImage() && tab.Image != nil {
+		if tab.IsTerminal() {
+			// Terminals have no line/col to report. Show the shell's
+			// state instead, so an exited shell doesn't look like a
+			// frozen editor.
+			if exited, msg := tab.Term.Exited(); exited {
+				left = " terminal · " + msg
+			} else {
+				left = " terminal · shell running"
+			}
+		} else if tab.IsImage() && tab.Image != nil {
 			b := tab.Image.Bounds()
 			left = fmt.Sprintf(" %s · %d×%d · %s",
 				strings.ToUpper(tab.ImageFmt), b.Dx(), b.Dy(), filepath.Base(tab.Path))

@@ -62,6 +62,8 @@ func (a *App) closeAllModals() {
 	a.formOpen = false
 	a.findOpen = false
 	a.finderOpen = false
+	a.searchOpen = false
+	a.diffOpen = false
 	a.findValue = nil
 	a.findCursor = 0
 	a.findScroll = 0
@@ -87,8 +89,19 @@ func (a *App) closeAllModals() {
 	// hook set it *after* calling openConfirm precisely so this
 	// clear doesn't erase their own arming.
 	a.confirmCancelHook = nil
+	a.diffEntries = nil
+	a.diffViewFile = ""
+	a.diffLines = nil
 	a.dragMode = ""
 	a.stopAutoScroll()
+	a.commandOpen = false
+	a.commandValue = nil
+	a.commandCursor = 0
+	a.commandScroll = 0
+	a.commandSuggestion = nil
+	a.commandSelected = -1
+	a.commandCycling = false
+	a.commandHint = ""
 }
 
 // anyModalOpen reports whether any modal is on screen. Used by the main
@@ -98,7 +111,7 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.formOpen || a.findOpen || a.finderOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.formOpen || a.findOpen || a.finderOpen || a.diffOpen || a.commandOpen
 }
 
 // -----------------------------------------------------------------------------
