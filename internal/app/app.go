@@ -1020,6 +1020,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
+	
+	// F6 copies the current editor selection to the clipboard.
+	// Modal-specific handlers above keep ownership of F6 while a dialog is open.
+	if ev.Key() == tcell.KeyF6 {
+		a.copySelection()
+		return
+	}
 
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
