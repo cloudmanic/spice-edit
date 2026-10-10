@@ -61,6 +61,10 @@ The goals, in order:
   you get a heads-up; if the file is deleted, the tab is flagged once.
 - **Toggleable, draggable sidebar** — show/hide the file tree from the
   menu, or drag the splitter to resize it.
+- **Terminal in a tab** — open your `$SHELL` in a real tab (`Esc \`` or
+  **Open terminal in new tab** from the `≡` menu) and run tests or git
+  without leaving the editor. Rendered by a built-in VT emulator, so it
+  works over SSH and inside `tmux` with no passthrough config.
 - **Clipboard over SSH** — OSC 52, including a `tmux` passthrough so
   copy works from inside a tmux session on a remote host.
 - **Format on save** — opt-in per-project via `.spiceedit/format.json`
@@ -191,6 +195,7 @@ within half a second tap one of the letters below.
 | `Esc /`     | Toggle line comment  |
 | `Esc f`     | Find in file         |
 | `Esc p`     | Find file in project |
+| `Esc \``    | Open terminal tab    |
 
 A lone `Esc` is harmless — if you don't follow it with a bound key
 within the window, your next keystroke goes to the editor as normal,
@@ -249,6 +254,45 @@ fuzzy file finder over every non-ignored file in the project:
   as the file tree, plus immediately after any create/rename/delete
   inside the editor.
 - Only files are listed — no directories, no symlinked duplicates.
+
+## Terminal tabs
+
+`Esc \`` (or **Open terminal in new tab** from the `≡` menu) opens your
+`$SHELL` in a new tab, so you can run tests, `git`, or anything else
+without dropping the editor or reaching for a second tmux pane.
+
+The terminal starts in the folder you're currently working in (the
+selected file's directory, falling back to the project root), so
+relative commands land where you expect.
+
+It's a real terminal, not a log pane: SpiceEdit embeds a VT emulator and
+paints the shell's screen into the tab, so `Ctrl+C`, colours, and
+full-screen programs all behave. Because the editor owns the emulation,
+none of it leaks into your host terminal — it works over SSH and inside
+`tmux` with no passthrough configuration.
+
+A few deliberate details:
+
+- **`Esc` belongs to the editor.** It's the only key the terminal never
+  receives, because double-tapping it is how you get back to the `≡`
+  menu. Everything else — including `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, and
+  arrow-key history — goes to the shell.
+- **The `Esc`-leader shortcuts stand down inside a terminal.** Elsewhere
+  `Esc s` saves and `Esc q` quits, but a shell prompt is the one place
+  you press `Esc` by reflex, and swallowing the next key to run an editor
+  action would be both surprising and destructive. Double-tap `Esc` for
+  the menu instead — every action is still there.
+- **Terminal tabs never look "unsaved."** They have no file, so Save,
+  Find, and the git gutter skip them, and quitting won't prompt about
+  them.
+- **Closing the tab closes the shell**, and quitting the editor closes
+  every terminal it opened. Backgrounded jobs are hung up with the shell
+  rather than orphaned.
+- **The status bar** shows `terminal · shell running`, or the exit
+  status once the shell has exited.
+
+Terminal tabs are unix-only (macOS and Linux). On Windows the menu row
+is greyed out, since Windows has no PTY the editor can drive this way.
 
 ## Custom actions (open remote files on your laptop)
 

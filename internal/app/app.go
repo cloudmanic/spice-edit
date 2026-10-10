@@ -22,7 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -115,6 +117,18 @@ type treeRefreshEvent struct {
 
 // When satisfies the tcell.Event interface.
 func (e *treeRefreshEvent) When() time.Time { return e.when }
+
+// termOutputEvent is posted by a terminal tab's PTY reader goroutine when
+// the child shell produces output. It carries no payload — the emulator
+// state was already updated under its own lock; this exists purely to
+// wake the main loop so it redraws. Following the project's rule that
+// background goroutines never mutate UI state directly.
+type termOutputEvent struct {
+	when time.Time
+}
+
+// When satisfies the tcell.Event interface.
+func (e *termOutputEvent) When() time.Time { return e.when }
 
 // customActionDoneEvent is posted by runCustomAction when its background
 // shell-out finishes. Carries the label and any error so the main loop
@@ -216,6 +230,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// View toggle
 		{
 			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
+			{label: "Open terminal in new tab", shortcut: "Esc `", action: (*App).menuOpenTerminal, enabled: (*App).canOpenTerminal},
 		},
 		// Quit
 		{
@@ -656,7 +671,7 @@ func (a *App) refreshGitStatus() {
 // refreshGitLineChanges refreshes gutter markers for every open text tab.
 func (a *App) refreshGitLineChanges() {
 	for _, tab := range a.tabs {
-		if tab == nil || tab.Path == "" || tab.IsImage() {
+		if tab == nil || tab.Path == "" || !tab.IsTextual() {
 			continue
 		}
 		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
@@ -698,9 +713,31 @@ func (a *App) stopTreeRefresh() {
 func (a *App) Close() {
 	a.stopTreeRefresh()
 	a.stopAutoScroll()
+	a.closeAllTerminals()
 	if a.screen != nil {
 		a.screen.Fini()
 	}
+}
+
+// closeAllTerminals kills every child shell the session started. Called
+// from Close so quitting the editor doesn't orphan them.
+//
+// The closes run concurrently because each one may wait up to
+// terminalCloseGrace for its shell to hang up its jobs; doing that
+// serially would freeze the UI for grace × N on the way out.
+func (a *App) closeAllTerminals() {
+	var wg sync.WaitGroup
+	for _, t := range a.tabs {
+		if !t.IsTerminal() {
+			continue
+		}
+		wg.Add(1)
+		go func(tab *editor.Tab) {
+			defer wg.Done()
+			tab.CloseTerminal()
+		}(t)
+	}
+	wg.Wait()
 }
 
 // Run is the editor's main event loop. It blocks on PollEvent, dispatches
@@ -736,6 +773,10 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleAutoScroll()
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
+	case *termOutputEvent:
+		// Nothing to do — the terminal's emulator state is already
+		// current. Falling through to the loop's unconditional redraw
+		// is the whole point of the event.
 	case *customActionDoneEvent:
 		a.handleCustomActionDone(e)
 	case *formatDoneEvent:
@@ -1047,7 +1088,15 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// key is bound in the leader table, fire the action and consume the
 	// keystroke. Unbound keys fall through to normal handling so a stray
 	// Esc doesn't swallow the next character the user types.
-	if !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs {
+	//
+	// Terminal tabs opt out of the single-Esc leader entirely. Esc is a
+	// key shell users press constantly (vi keybindings, cancelling a
+	// completion, plain habit), and swallowing the *next* rune to run an
+	// editor action is both surprising and destructive: "Esc" then "q"
+	// would quit the editor — hanging up every running shell — instead of
+	// typing "q" at the prompt. Double-Esc still opens the action menu,
+	// so every action remains reachable.
+	if !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs && !a.activeTabIsTerminal() {
 		if ev.Key() == tcell.KeyRune {
 			if action := leaderActionFor(ev.Rune()); action != nil {
 				a.lastEscape = time.Time{}
@@ -1084,6 +1133,18 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 
 	tab := a.activeTabPtr()
 	if tab == nil {
+		return
+	}
+	// Terminal tabs forward almost every keystroke to the child shell,
+	// including the Ctrl keys the editor otherwise refuses to bind —
+	// there they mean "signal the foreground process", not an editor
+	// action. Esc never reaches here (it's consumed above for the menu
+	// and leader table), which is the one sequence a shell user has to
+	// reach via Esc-Esc → menu instead.
+	if tab.IsTerminal() {
+		if b := editor.TerminalKeyBytes(ev); b != nil {
+			tab.Term.Write(b)
+		}
 		return
 	}
 	// Image-preview tabs are read-only — no cursor, no editing, no
@@ -1426,11 +1487,11 @@ func (a *App) syncActiveTreeFile() {
 }
 
 // editorPress handles the initial mouse press inside the editor — placing
-// the caret, optionally selecting a word on double-click. Image tabs
-// have no caret, so the press is dropped.
+// the caret, optionally selecting a word on double-click. Non-text tabs
+// (image previews, terminals) have no caret, so the press is dropped.
 func (a *App) editorPress(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1478,7 +1539,7 @@ func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
 // drop the drag entirely.
 func (a *App) editorDrag(x, y int) {
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	ex, ey, ew, eh := a.editorRect()
@@ -1799,6 +1860,9 @@ func (a *App) closeTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
+	// Terminal tabs own a child shell — tear it down with the tab so we
+	// don't leak a running process for the rest of the session.
+	a.tabs[idx].CloseTerminal()
 	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
 	if a.activeTab >= len(a.tabs) {
 		a.activeTab = len(a.tabs) - 1
@@ -1942,7 +2006,7 @@ func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 // preview. Used by Save and Save & Close.
 func (a *App) hasSavableTab() bool {
 	t := a.activeTabPtr()
-	return t != nil && t.Path != "" && !t.IsImage()
+	return t != nil && t.Path != "" && t.IsTextual()
 }
 
 // hasFileTab reports whether the active tab is backed by a real file
@@ -1963,7 +2027,7 @@ func (a *App) hasSelection() bool {
 // known single-line comment marker.
 func (a *App) hasCommentableTab() bool {
 	t := a.activeTabPtr()
-	if t == nil || t.IsImage() {
+	if t == nil || !t.IsTextual() {
 		return false
 	}
 	_, ok := editor.LineCommentPrefix(t.Path)
@@ -2161,7 +2225,7 @@ func (a *App) menuPaste() {
 func (a *App) menuToggleLineComment() {
 	a.closeMenu()
 	tab := a.activeTabPtr()
-	if tab == nil || tab.IsImage() {
+	if tab == nil || !tab.IsTextual() {
 		return
 	}
 	changed, ok := tab.ToggleLineComment()
@@ -2209,6 +2273,74 @@ func (a *App) sidebarToggleLabel() string {
 		return "Hide file explorer"
 	}
 	return "Show file explorer"
+}
+
+// activeTabIsTerminal reports whether the focused tab hosts a shell.
+// Used to keep the Esc-leader table from stealing keystrokes that belong
+// to the terminal.
+func (a *App) activeTabIsTerminal() bool {
+	t := a.activeTabPtr()
+	return t != nil && t.IsTerminal()
+}
+
+// canOpenTerminal reports whether a terminal tab can be opened. PTYs are
+// a unix affair — creack/pty compiles on Windows but every call returns
+// ErrUnsupported — so the row is greyed out there rather than offering an
+// action that can only fail.
+func (a *App) canOpenTerminal() bool {
+	return runtime.GOOS != "windows"
+}
+
+// terminalCwd picks the working directory a new terminal starts in: the
+// folder the user is "in" according to the tree (activeFolder, which
+// tracks the selected file's directory), falling back to the project
+// root. This is the behaviour that makes `go test ./...` land where the
+// user expects instead of at a root they navigated away from.
+func (a *App) terminalCwd() string {
+	if a.activeFolder != "" {
+		if info, err := os.Stat(a.activeFolder); err == nil && info.IsDir() {
+			return a.activeFolder
+		}
+	}
+	return a.rootDir
+}
+
+// menuOpenTerminal opens a new tab running the user's shell and focuses
+// it. The shell is started at terminalCwd() and sized to the current
+// editor pane; the first Render corrects the size if the pane geometry
+// differs from our estimate.
+//
+// Output arrives on a background goroutine which posts termOutputEvent
+// to wake the main loop — the goroutine never touches UI state itself.
+func (a *App) menuOpenTerminal() {
+	a.closeMenu()
+	if !a.canOpenTerminal() {
+		a.flash("Terminal tabs aren't supported on this platform")
+		return
+	}
+
+	w, h := a.editorSize()
+	scr := a.screen
+	notify := func() {
+		// PostEvent can block if the queue is full and the main loop is
+		// busy; the non-blocking variant would drop redraws. A blocking
+		// post is correct here because the reader goroutine has nothing
+		// else to do, and it can't deadlock — the main loop drains the
+		// queue continuously.
+		_ = scr.PostEvent(&termOutputEvent{when: time.Now()})
+	}
+
+	tab, err := editor.NewTerminalTab(a.terminalCwd(), w, h, notify)
+	if err != nil {
+		a.openInfo("Couldn't open terminal", []string{err.Error()})
+		return
+	}
+	a.tabs = append(a.tabs, tab)
+	a.activeTab = len(a.tabs) - 1
+	// A terminal has no file, so this clears the tree's highlight rather
+	// than leaving the previously active file looking selected.
+	a.syncActiveTreeFile()
+	a.flash("Terminal opened — Esc Esc for the menu")
 }
 
 // menuQuit exits the editor. When any tab has unsaved changes, opens the
@@ -2396,6 +2528,12 @@ func (a *App) drawTabBar() {
 			name := tab.DisplayName()
 			glyph := icons.For(name, false, false)
 			gfg := icons.ColorFor(name, false, fg)
+			// Terminal tabs aren't files — give them the shell glyph
+			// instead of the generic "unknown file" one.
+			if tab.IsTerminal() {
+				glyph = icons.Terminal
+				gfg = fg
+			}
 			gst := tcell.StyleDefault.Background(bg).Foreground(gfg)
 			if active {
 				gst = gst.Bold(true)
@@ -2517,7 +2655,16 @@ func (a *App) drawStatusBar() {
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
 	} else if tab := a.activeTabPtr(); tab != nil {
-		if tab.IsImage() && tab.Image != nil {
+		if tab.IsTerminal() {
+			// Terminals have no line/col to report. Show the shell's
+			// state instead, so an exited shell doesn't look like a
+			// frozen editor.
+			if exited, msg := tab.Term.Exited(); exited {
+				left = " terminal · " + msg
+			} else {
+				left = " terminal · shell running"
+			}
+		} else if tab.IsImage() && tab.Image != nil {
 			b := tab.Image.Bounds()
 			left = fmt.Sprintf(" %s · %d×%d · %s",
 				strings.ToUpper(tab.ImageFmt), b.Dx(), b.Dy(), filepath.Base(tab.Path))

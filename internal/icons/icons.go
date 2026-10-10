@@ -179,6 +179,7 @@ const (
 	FolderClosed = "" //  - generic closed folder (nf-fa-folder)
 	FolderOpen   = "" //  - generic open folder (nf-fa-folder_open)
 	FileDefault  = "" //  - generic file (nf-fa-file)
+	Terminal     = "" //  - terminal / shell (nf-fa-terminal)
 )
 
 // extIcons maps lowercase file extensions (with leading dot) to their

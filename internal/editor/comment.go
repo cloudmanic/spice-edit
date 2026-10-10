@@ -97,7 +97,7 @@ func LineCommentPrefix(path string) (string, bool) {
 // ToggleLineComment comments or uncomments the selected lines. It returns
 // ok=false when the active file type has no known line-comment marker.
 func (t *Tab) ToggleLineComment() (changed bool, ok bool) {
-	if t == nil || t.IsImage() || t.Buffer == nil {
+	if t == nil || !t.IsTextual() || t.Buffer == nil {
 		return false, false
 	}
 	prefix, ok := LineCommentPrefix(t.Path)
