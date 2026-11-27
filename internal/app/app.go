@@ -358,6 +358,7 @@ type App struct {
 	menuOpen       bool
 	hoveredMenuRow int       // index into menuItems of the row under the mouse, or -1.
 	lastEscape     time.Time // timestamp of the previous Esc press, for double-tap detection.
+	lastF1         time.Time // timestamp of the previous F1 press, for double-tap detection.
 
 	// Prompt modal — single-line text input with OK / Cancel. Used by
 	// Rename and New File. See modals.go for render + event handling.
@@ -1025,6 +1026,19 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	// Modal-specific handlers above keep ownership of F6 while a dialog is open.
 	if ev.Key() == tcell.KeyF6 {
 		a.copySelection()
+		return
+	}
+	// Double F1
+	if ev.Key() == tcell.KeyF1 {
+		now := time.Now()
+
+		if !a.lastF1.IsZero() && now.Sub(a.lastF1) < doubleEscMs {
+			a.lastF1 = time.Time{}
+			a.copySelection()
+			return
+		}
+
+		a.lastF1 = now
 		return
 	}
 
