@@ -181,6 +181,7 @@ func builtinMenuGroups() [][]menuItemDef {
 	return [][]menuItemDef{
 		// Tab actions
 		{
+			{action: (*App).menuToggleWrap, enabled: alwaysTrue, labelFor: (*App).wrapToggleLabel},
 			{label: "Save", shortcut: "Esc s", action: (*App).menuSave, enabled: (*App).hasSavableTab},
 			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
 			{label: "Close tab", shortcut: "Esc w", action: (*App).menuClose, enabled: (*App).hasTab},
@@ -333,6 +334,7 @@ type App struct {
 	// sidebarShown controls whether the file explorer panel is visible.
 	// When false the editor and tab bar fill the whole window.
 	sidebarShown bool
+	wrapDisabled bool
 
 	// sidebarWidth is the live width of the file-explorer block (file tree
 	// + 1-cell splitter on its right edge), in screen cells. The user can
@@ -1021,7 +1023,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
-	
+
 	// F6 copies the current editor selection to the clipboard.
 	// Modal-specific handlers above keep ownership of F6 while a dialog is open.
 	if ev.Key() == tcell.KeyF6 {
@@ -1117,9 +1119,11 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 
 	switch ev.Key() {
 	case tcell.KeyUp:
-		tab.MoveCursor(-1, 0, extend)
+		w, _ := a.editorSize()
+		tab.MoveVisual(-1, w, extend)
 	case tcell.KeyDown:
-		tab.MoveCursor(1, 0, extend)
+		w, _ := a.editorSize()
+		tab.MoveVisual(1, w, extend)
 	case tcell.KeyLeft:
 		tab.MoveCursor(0, -1, extend)
 	case tcell.KeyRight:
@@ -1129,11 +1133,11 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case tcell.KeyEnd:
 		tab.MoveLineEnd(extend)
 	case tcell.KeyPgUp:
-		_, h := a.editorSize()
-		tab.MoveCursor(-h, 0, extend)
+		w, h := a.editorSize()
+		tab.MoveVisual(-h, w, extend)
 	case tcell.KeyPgDn:
-		_, h := a.editorSize()
-		tab.MoveCursor(h, 0, extend)
+		w, h := a.editorSize()
+		tab.MoveVisual(h, w, extend)
 	case tcell.KeyEnter:
 		tab.InsertString("\n")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -1713,6 +1717,8 @@ func (a *App) openFile(path string) {
 		a.flash(fmt.Sprintf("Error: %v", err))
 		return
 	}
+	w, _ := a.editorSize()
+	t.SetWrap(!a.wrapDisabled, w)
 	a.tabs = append(a.tabs, t)
 	a.activeTab = len(a.tabs) - 1
 	t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
@@ -2230,6 +2236,24 @@ func (a *App) sidebarToggleLabel() string {
 		return "Hide file explorer"
 	}
 	return "Show file explorer"
+}
+
+// menuToggleWrap switches soft wrapping for all open and future tabs.
+func (a *App) menuToggleWrap() {
+	a.closeMenu()
+	a.wrapDisabled = !a.wrapDisabled
+	w, _ := a.editorSize()
+	for _, tab := range a.tabs {
+		tab.SetWrap(!a.wrapDisabled, w)
+	}
+}
+
+// wrapToggleLabel describes the action available in the menu.
+func (a *App) wrapToggleLabel() string {
+	if a.wrapDisabled {
+		return "Turn text wrapping on"
+	}
+	return "Turn text wrapping off"
 }
 
 // menuQuit exits the editor. When any tab has unsaved changes, opens the

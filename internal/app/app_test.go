@@ -1358,6 +1358,7 @@ func TestHandleMouse_WheelHorizontal(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
+	a.menuToggleWrap()
 	a.openFile(target)
 	tab := a.activeTabPtr()
 	if tab == nil {
@@ -1391,6 +1392,7 @@ func TestHandleMouse_ShiftWheelScrollsHorizontally(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
+	a.menuToggleWrap()
 	a.openFile(target)
 	tab := a.activeTabPtr()
 	if tab == nil {
@@ -1443,6 +1445,7 @@ func TestHandleMouse_ShiftStickyForWheel(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	a := newTestApp(t, dir)
+	a.menuToggleWrap()
 	a.openFile(target)
 	tab := a.activeTabPtr()
 	editorX := a.sidebarW() + 10
@@ -1663,13 +1666,13 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 31 {
-		t.Errorf("modalHeight = %d, want 31", h)
+	if h != 32 {
+		t.Errorf("modalHeight = %d, want 32", h)
 	}
-	if got := len(items); got != 21 {
-		t.Errorf("item count = %d, want 21 built-ins", got)
+	if got := len(items); got != 22 {
+		t.Errorf("item count = %d, want 22 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 21, 26, 28}
+	wantDiv := []int{2, 7, 11, 14, 22, 27, 29}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1677,6 +1680,46 @@ func TestMenuLayout_NoCustomActions(t *testing.T) {
 		if dividers[i] != d {
 			t.Errorf("dividers[%d] = %d, want %d", i, dividers[i], d)
 		}
+	}
+}
+
+// TestMenuToggleWrap checks the default and the setting for future tabs.
+func TestMenuToggleWrap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 160)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(path)
+	tab := a.activeTabPtr()
+	if a.wrapToggleLabel() != "Turn text wrapping off" {
+		t.Fatal("wrapping should be on by default")
+	}
+	tab.ScrollH(5)
+	if tab.ScrollX != 0 {
+		t.Fatal("default tab should not scroll horizontally")
+	}
+	a.width, a.height = 50, 24
+	a.screen.(tcell.SimulationScreen).SetSize(a.width, a.height)
+	a.openMenu()
+	a.draw()
+	item := menuItemByLabel(t, a, "Turn text wrapping off")
+	mx, my, _, _ := a.menuModalRect()
+	a.handleMenuMouse(mx+5, my+item.relY, tcell.Button1)
+	tab.ScrollH(5)
+	if tab.ScrollX != 5 || a.wrapToggleLabel() != "Turn text wrapping on" {
+		t.Fatal("menu did not disable wrapping")
+	}
+	other := filepath.Join(dir, "other.txt")
+	a.openFile(other)
+	a.activeTabPtr().ScrollH(5)
+	if a.activeTabPtr().ScrollX != 5 {
+		t.Fatal("new tab did not inherit disabled wrapping")
+	}
+	menuItemByLabel(t, a, "Turn text wrapping on").action(a)
+	if tab.ScrollX != 0 || a.activeTabPtr().ScrollX != 0 {
+		t.Fatal("enabling wrapping did not update all tabs")
 	}
 }
 
@@ -1795,7 +1838,7 @@ func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
 	t.Helper()
 	items, _, _ := a.menuLayout()
 	for _, item := range items {
-		if item.label == label {
+		if item.label == label || (item.labelFor != nil && item.labelFor(a) == label) {
 			return item
 		}
 	}
@@ -1830,8 +1873,8 @@ func TestMenuLayout_WithCustomActions(t *testing.T) {
 	}
 	items, _, h := a.menuLayout()
 
-	if h != 34 { // 31 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 34", h)
+	if h != 35 { // 32 + 2 items + 1 divider
+		t.Errorf("modalHeight = %d, want 35", h)
 	}
 	// Custom actions should be the second-to-last and third-to-last
 	// rows, with Quit as the final row.

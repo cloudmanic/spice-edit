@@ -549,6 +549,18 @@ Releases are fully automated. Every push to `main`:
 No PAT, no separate tap repo — the default workflow `GITHUB_TOKEN` is
 enough since the formula lives in the source repo.
 
+## Build (MMCR)
+
+```
+
+go build -o .\spiceedit.exe .
+
+Get-Command spiceedit.exe -All | Select-Object -ExpandProperty Sourc
+
+cd C:\Users\massi\AppData\Local\Programs\spiceedit
+```
+
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

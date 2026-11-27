@@ -61,7 +61,7 @@ type Tab struct {
 	Buffer     *Buffer
 	Cursor     Position // Where new typed text appears.
 	Anchor     Position // Selection anchor; equals Cursor when nothing is selected.
-	ScrollY    int      // Index of the first visible line.
+	ScrollY    int      // First visible line, or visual row when wrapping.
 	ScrollX    int      // Index of the first visible column (rune-indexed).
 	Dirty      bool
 	Styles     [][]tcell.Style
@@ -126,6 +126,11 @@ type Tab struct {
 	// real tab; a 2-space-indented file gets two spaces. Mixed-style
 	// files take the dominant signal.
 	IndentUnit string
+
+	wrapEnabled bool
+	wrapWidth   int
+	wrapStarts  []int
+	wrapRows    []wrappedRow
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
@@ -513,6 +518,10 @@ func (t *Tab) SelectAll() {
 // caller passes the editor area's width and height because the Tab itself
 // doesn't know its render rect.
 func (t *Tab) EnsureVisible(viewW, viewH int) {
+	if t.wrapEnabled {
+		t.ensureWrappedVisible(viewW, viewH)
+		return
+	}
 	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
 	if contentW < 1 {
 		contentW = 1
@@ -543,6 +552,10 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if t.IsImage() {
 		t.renderImage(scr, th, x, y, w, h)
+		return
+	}
+	if t.wrapEnabled {
+		t.renderWrapped(scr, th, x, y, w, h)
 		return
 	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
@@ -734,6 +747,9 @@ func gitLineMarkerColor(th theme.Theme, change GitLineChange) tcell.Color {
 // HitTest converts screen coordinates within this tab's render area to a
 // buffer position. ok=false means the click was outside any line.
 func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
+	if t.wrapEnabled {
+		return t.wrappedHitTest(localX, localY, w, h)
+	}
 	if localY < 0 || localY >= h {
 		return Position{}, false
 	}
@@ -779,6 +795,9 @@ func (t *Tab) Scroll(deltaLines int) {
 // mouse-wheel dispatcher can treat horizontal and vertical wheels
 // symmetrically.
 func (t *Tab) ScrollH(deltaCols int) {
+	if t.wrapEnabled {
+		return
+	}
 	t.ScrollX += deltaCols
 	if t.ScrollX < 0 {
 		t.ScrollX = 0
